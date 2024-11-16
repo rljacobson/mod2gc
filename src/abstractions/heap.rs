@@ -66,8 +66,8 @@ macro_rules! heap_construct {
         Box::into_raw(boxed)
     }};
 }
+#[allow(unused_imports)]
 pub use heap_construct;
-
 
 /// Destroy a heap allocated object pointed to by a mutable pointer. This is
 /// the companion macro to `heap_construct`. It is up to the user to ensure
@@ -85,4 +85,5 @@ macro_rules! heap_destroy {
         // The Box is dropped here, and the memory is deallocated
     }};
 }
+#[allow(unused_imports)]
 pub use heap_destroy;

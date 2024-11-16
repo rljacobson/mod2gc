@@ -18,7 +18,6 @@ The following compares Maude's `DagNode` to our implementation here.
 
 */
 
-use crate::add;
 
 mod flags;
 mod node;
@@ -26,6 +25,7 @@ mod root_container;
 mod arena;
 mod allocator;
 mod bucket;
+mod node_vector;
 
 /// A `*mut Void` is a pointer to a `u8`
 pub type Void = u8;
@@ -57,12 +57,18 @@ pub enum DagNodeKind {
 
 #[cfg(test)]
 mod tests {
-  use crate::dag_node::node::DagNode;
-  use super::*;
+  use crate::dag_node::DagNodeKind;
+  use crate::dag_node::flags::DagNodeFlags;
+  use crate::dag_node::node::{DagNode, DagNodeArgument};
+  use crate::symbol::SymbolPtr;
 
   #[test]
   fn size_of_dag_node() {
+    println!("size of SymbolPtr: {}", size_of::<SymbolPtr>());
+    println!("size of DagNodeArgument: {}", size_of::<DagNodeArgument>());
+    println!("size of DagNodeKind: {}", size_of::<DagNodeKind>());
+    println!("size of DagNodeFlags: {}", size_of::<DagNodeFlags>());
     println!("size of DagNode: {}", size_of::<DagNode>());
-    assert_eq!(size_of::<DagNode>(), 3 * size_of::<usize>());
+    assert_eq!(size_of::<DagNode>(), 4 * size_of::<usize>());
   }
 }

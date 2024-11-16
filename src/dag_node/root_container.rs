@@ -1,16 +1,17 @@
 /*!
 
-A `RootContainer` is a linked list of roots of garbage collected objects. 
+A `RootContainer` is a linked list of roots of garbage collected objects.
 
 */
 
 use std::sync::atomic::{
-  AtomicPtr, 
+  AtomicPtr,
   Ordering
 };
+use std::sync::Mutex;
 use crate::dag_node::node::DagNode;
 
-static LIST_HEAD: AtomicPtr<RootContainer> = AtomicPtr::new(std::ptr::null_mut());
+static LIST_HEAD: Mutex<AtomicPtr<RootContainer>> = Mutex::new(AtomicPtr::new(std::ptr::null_mut()));
 
 pub struct RootContainer {
   next: Option<*mut RootContainer>,
@@ -22,7 +23,7 @@ impl RootContainer {
   pub fn new(node: *mut DagNode) -> RootContainer {
     let maybe_node = if node.is_null() {
       None
-    } else { 
+    } else {
       Some(node)
     };
     let mut container = RootContainer {
@@ -35,7 +36,7 @@ impl RootContainer {
     }
     container
   }
-  
+
   pub fn mark(&mut self) {
     unsafe {
       if let Some(node) = self.node {
@@ -43,42 +44,44 @@ impl RootContainer {
       }
     }
   }
-  
+
   pub fn link(&mut self){
+    let list_head = LIST_HEAD.lock().unwrap();
     self.prev = None;
-    self.next = unsafe { 
-      LIST_HEAD.load(Ordering::Relaxed)
+    self.next = unsafe {
+      list_head.load(Ordering::Relaxed)
                .as_mut()
-               .map(|head| head as *mut RootContainer) 
+               .map(|head| head as *mut RootContainer)
     };
-    
+
     if let Some(next) = self.next {
       unsafe {
         next.as_mut_unchecked().prev = Some(self);
       }
     }
-    
-    LIST_HEAD.store(self, Ordering::Relaxed);
+
+    list_head.store(self, Ordering::Relaxed);
   }
-  
+
   pub fn unlink(&mut self){
+    let list_head = LIST_HEAD.lock().unwrap();
     if let Some(next) = self.next {
       unsafe {
         next.as_mut_unchecked().prev = self.prev;
       }
     }
-    
+
     if let Some(prev) = self.prev {
       unsafe {
         prev.as_mut_unchecked().next = self.next;
       }
     } else if let Some(next) = self.next {
-      LIST_HEAD.store(next, Ordering::Relaxed);
+      list_head.store(next, Ordering::Relaxed);
     } else {
-      LIST_HEAD.store(std::ptr::null_mut(), Ordering::Relaxed);
+      list_head.store(std::ptr::null_mut(), Ordering::Relaxed);
     }
   }
-  
+
 }
 
 impl Drop for RootContainer {
@@ -91,8 +94,9 @@ impl Drop for RootContainer {
 
 /// Marks all roots in the linked list of `RootContainer`s.
 pub fn mark_roots() {
+  let list_head = LIST_HEAD.lock().unwrap();
   let mut root = unsafe {
-    LIST_HEAD.load(Ordering::Relaxed)
+    list_head.load(Ordering::Relaxed)
              .as_mut()
              .map(|head| head as *mut RootContainer)
   };

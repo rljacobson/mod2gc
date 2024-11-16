@@ -29,9 +29,10 @@ Because live objects are relocated during garbage collection to previously empty
 use std::{
   cmp::max,
   alloc::{alloc_zeroed, Layout},
-  ptr::drop_in_place
+  ptr::drop_in_place,
+  sync::Mutex
 };
-
+use once_cell::sync::Lazy;
 use crate::{
   dag_node::{
     arena::Arena,
@@ -45,17 +46,28 @@ use crate::{
     RESERVE_SIZE,
     TARGET_MULTIPLIER,
     node::DagNode,
-    root_container::mark_roots
+    root_container::mark_roots,
+    flags::DagNodeFlags
   }
 };
-use crate::dag_node::flags::DagNodeFlags;
 
 // Constant Allocator Parameters
 const SMALL_MODEL_SLOP: f64   = 8.0;
 const BIG_MODEL_SLOP  : f64   = 2.0;
-const LOWER_BOUND     : usize = 4 * 1024 * 1024;  // Use small model if <= 4 million nodes
+const LOWER_BOUND     : usize =  4 * 1024 * 1024; // Use small model if <= 4 million nodes
 const UPPER_BOUND     : usize = 32 * 1024 * 1024; // Use big model if >= 32 million nodes
 
+// static CONFIG: Lazy<HashMap<String, String>> = Lazy::new(|| {
+pub static mut GLOBAL_NODE_ALLOCATOR: Lazy<Mutex<Allocator>> = Lazy::new(|| {
+  Mutex::new(Allocator::new())
+});
+
+pub fn acquire_allocator() -> &'static mut Allocator {
+  unsafe{
+    #[allow(static_mut_refs)]
+    &mut GLOBAL_NODE_ALLOCATOR
+  }.get_mut().unwrap()
+}
 
 pub struct Allocator{
   // General settings
@@ -84,7 +96,9 @@ pub struct Allocator{
   target        : usize,  // Amount to use before GC (bytes)
 }
 
-
+// Access is hidden behind a mutex.
+unsafe impl Send for Allocator {}
+// unsafe impl Sync for Allocator {}
 
 impl Allocator {
   pub fn new() -> Self {
@@ -329,7 +343,7 @@ impl Allocator {
       if bucket.is_null() {
         break;
       }
-      let mut bucket_mut = bucket.as_mut_unchecked();
+      let bucket_mut = bucket.as_mut_unchecked();
       if bucket_mut.bytes_free >= bytes_needed {
         // Move bucket from unused list to in use list
         if prev_bucket.is_null() {
@@ -396,7 +410,7 @@ impl Allocator {
     self.nr_nodes_in_use   = 0;
     // Prep bucket storage for sweep
     let old_storage_in_use = self.storage_in_use;
-    let mut bucket         = self.bucket_list;
+    let bucket         = self.bucket_list;
     self.bucket_list       = self.unused_list;
     self.unused_list       = std::ptr::null_mut();
     self.storage_in_use    = 0;
@@ -418,9 +432,10 @@ impl Allocator {
     // Calculate if we should allocate more arenas to avoid an early gc.
     let node_count = (self.nr_arenas as usize) * ARENA_SIZE;
     GC_COUNT += 1;
+    let gc_count = GC_COUNT; // To silence shared_mut_ref warning
 
     if self.show_gc {
-      println!("Collection: {}", GC_COUNT);
+      println!("Collection: {}", gc_count);
 
       println!(
         "Arenas: {}\tNodes: {} ({:.2} MB)\tNow: {} ({:.2} MB)",
@@ -535,7 +550,7 @@ impl Allocator {
       } // end loop over arenas
 
       // Now tidy last_active_arena from d upto and including last_active_node.
-      let mut e = self.last_active_node;
+      let e = self.last_active_node;
       while d != e {
         let d_mut = d.as_mut_unchecked();
 
@@ -569,7 +584,7 @@ impl Allocator {
       let arena_mut = arena.as_mut_unchecked();
       let mut d     = arena_mut.first_node();
 
-      let mut bound: usize =
+      let bound: usize =
           match arena == self.current_arena {
 
             true => {
@@ -621,17 +636,17 @@ impl Allocator {
   #[cfg(feature = "gc_debug")]
   fn dump_memory_variables(&self) {
     eprintln!(
-      "nrArenas = {}\n\
-            nrNodesInUse = {}\n\
-            currentArenaPastActiveArena = {}\n\
-            needToCollectGarbage = {}\n\
-            firstArena = {:p}\n\
-            lastArena = {:p}\n\
-            currentArena = {:p}\n\
-            nextNode = {:p}\n\
-            endPointer = {:p}\n\
-            lastActiveArena = {:p}\n\
-            lastActiveNode = {:p}",
+      "\tnrArenas = {}\n\
+            \tnrNodesInUse = {}\n\
+            \tcurrentArenaPastActiveArena = {}\n\
+            \tneedToCollectGarbage = {}\n\
+            \tfirstArena = {:p}\n\
+            \tlastArena = {:p}\n\
+            \tcurrentArena = {:p}\n\
+            \tnextNode = {:p}\n\
+            \tendPointer = {:p}\n\
+            \tlastActiveArena = {:p}\n\
+            \tlastActiveNode = {:p}",
       self.nr_arenas,
       self.nr_nodes_in_use,
       self.current_arena_past_active_arena,
@@ -646,4 +661,27 @@ impl Allocator {
     );
   }
 
+}
+
+
+
+#[cfg(test)]
+mod tests {
+  use crate::dag_node::DagNodeKind;
+  use super::*;
+
+  #[test]
+  fn it_works() {
+    let mut allocator = Allocator::new();
+    let node_ptr = allocator.allocate_dag_node();
+    let node_mut = match unsafe { node_ptr.as_mut() } {
+      None => {
+        panic!("allocate_dag_node returned None");
+      }
+      Some(node) => { node }
+    };
+    
+    node_mut.kind = DagNodeKind::Free;
+    
+  }
 }

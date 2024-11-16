@@ -1,4 +1,6 @@
 #![feature(ptr_as_ref_unchecked)]
+#![allow(dead_code)]
+extern crate core;
 
 mod symbol;
 mod abstractions;

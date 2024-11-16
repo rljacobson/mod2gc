@@ -27,8 +27,6 @@ impl Arena {
 
   #[inline(always)]
   pub fn first_node(&mut self) -> *mut DagNode {
-    unsafe{
-      self.data.as_mut_ptr()
-    }
+    self.data.as_mut_ptr()
   }
 }
