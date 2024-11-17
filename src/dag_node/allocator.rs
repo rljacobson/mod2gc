@@ -27,28 +27,23 @@ Because live objects are relocated during garbage collection to previously empty
 */
 
 use std::{
-  cmp::max,
   alloc::{alloc_zeroed, Layout},
+  cmp::max,
   ptr::drop_in_place,
   sync::Mutex
 };
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering::Relaxed;
+use std::sync::MutexGuard;
 use once_cell::sync::Lazy;
-use crate::{
-  dag_node::{
-    arena::Arena,
-    bucket::Bucket,
-    flags::DagNodeFlag,
-    Void,
-    ARENA_SIZE,
-    BUCKET_MULTIPLIER,
-    INITIAL_TARGET,
-    MIN_BUCKET_SIZE,
-    RESERVE_SIZE,
-    TARGET_MULTIPLIER,
-    node::DagNode,
-    root_container::mark_roots,
-    flags::DagNodeFlags
-  }
+use crate::dag_node::{
+  arena::Arena,
+  bucket::Bucket,
+  flags::DagNodeFlag,
+  flags::DagNodeFlags,
+  node::DagNode,
+  root_container::mark_roots,
+  Void
 };
 
 // Constant Allocator Parameters
@@ -56,17 +51,38 @@ const SMALL_MODEL_SLOP: f64   = 8.0;
 const BIG_MODEL_SLOP  : f64   = 2.0;
 const LOWER_BOUND     : usize =  4 * 1024 * 1024; // Use small model if <= 4 million nodes
 const UPPER_BOUND     : usize = 32 * 1024 * 1024; // Use big model if >= 32 million nodes
+// It looks like Maude assumes DagNodes are 6 words in size, but ours are 3 words,
+// at least so far.
+pub(crate) const ARENA_SIZE: usize = 5460;           // Arena size in nodes; 5460 * 6 + 1 + new/malloc_overhead <= 32768 words
+const RESERVE_SIZE         : usize = 256;            // If fewer nodes left call GC when allowed
+const BUCKET_MULTIPLIER    : usize = 8;              // To determine bucket size for huge allocations
+const MIN_BUCKET_SIZE      : usize = 256 * 1024 - 8; // Bucket size for normal allocations
+const INITIAL_TARGET       : usize = 220 * 1024;     // Just under 8/9 of MIN_BUCKET_SIZE
+const TARGET_MULTIPLIER    : usize = 8;
 
-// static CONFIG: Lazy<HashMap<String, String>> = Lazy::new(|| {
-pub static mut GLOBAL_NODE_ALLOCATOR: Lazy<Mutex<Allocator>> = Lazy::new(|| {
+static ACTIVE_NODE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+static GLOBAL_NODE_ALLOCATOR: Lazy<Mutex<Allocator>> = Lazy::new(|| {
   Mutex::new(Allocator::new())
 });
 
-pub fn acquire_allocator() -> &'static mut Allocator {
-  unsafe{
-    #[allow(static_mut_refs)]
-    &mut GLOBAL_NODE_ALLOCATOR
-  }.get_mut().unwrap()
+#[inline(always)]
+pub fn acquire_allocator() -> MutexGuard<'static, Allocator> {
+  match GLOBAL_NODE_ALLOCATOR.try_lock() {
+    Ok(allocator) => allocator,
+    Err(e) => {
+      panic!("Global allocator is deadlocked: {}", e);
+    }
+  }
+  // GLOBAL_NODE_ALLOCATOR.lock().unwrap()
+}
+#[inline(always)]
+pub fn increment_active_node_count() {
+  ACTIVE_NODE_COUNT.fetch_add(1, Relaxed);
+}
+#[inline(always)]
+pub fn active_node_count() {
+  ACTIVE_NODE_COUNT.load(Relaxed);
 }
 
 pub struct Allocator{
@@ -76,7 +92,6 @@ pub struct Allocator{
 
   // Arena management variables
   nr_arenas                      : u32,
-  nr_nodes_in_use                : usize,
   current_arena_past_active_arena: bool,
   need_to_collect_garbage        : bool,
   first_arena                    : *mut Arena,
@@ -103,10 +118,9 @@ unsafe impl Send for Allocator {}
 impl Allocator {
   pub fn new() -> Self {
     Allocator {
-      show_gc          : false,
+      show_gc          : true,
       early_quit       : 0,
       nr_arenas        : 0,
-      nr_nodes_in_use  : 0,
 
       current_arena_past_active_arena: false,
       need_to_collect_garbage        : false,
@@ -159,7 +173,18 @@ impl Allocator {
       if bucket.bytes_free >= bytes_needed {
         bucket.bytes_free -= bytes_needed;
         let t = bucket.next_free;
-        bucket.next_free = unsafe { t.add(bytes_needed) };
+        bucket.next_free = {
+          // align next_free on 8 byte boundary
+          let mut next_free = unsafe { t.add(bytes_needed) };
+          let align_offset = next_free.align_offset(8);
+          if align_offset == usize::MAX {
+            panic!("Cannot align memory to 8 byte boundary")
+          }
+          bucket.bytes_free -= align_offset;
+          next_free = unsafe { next_free.add(align_offset) };
+
+          next_free
+        };
 
         return t;
       }
@@ -204,6 +229,7 @@ impl Allocator {
       self.next_node = current_node.add(1);
     } // end of unsafe block
 
+    increment_active_node_count();
     current_node
   }
 
@@ -336,6 +362,10 @@ impl Allocator {
 
   /// Allocates the given number of bytes by creating more bucket storage.
   unsafe fn slow_allocate_storage(&mut self, bytes_needed: usize) -> *mut u8 {
+    #[cfg(feature = "gc_debug")]
+    {
+      eprintln!("slow_allocate_storage()");
+    }
     // Loop through the bucket list
     let mut prev_bucket: *mut Bucket = std::ptr::null_mut();
     let mut bucket:      *mut Bucket = self.unused_list;
@@ -407,10 +437,13 @@ impl Allocator {
     self.check_arenas();
 
     // Mark phase
-    self.nr_nodes_in_use   = 0;
+    
+    let old_active_node_count = ACTIVE_NODE_COUNT.load(Relaxed);
+    ACTIVE_NODE_COUNT.store(0, Relaxed); // to be updated during mark phase.
+    
     // Prep bucket storage for sweep
     let old_storage_in_use = self.storage_in_use;
-    let bucket         = self.bucket_list;
+    let bucket             = self.bucket_list;
     self.bucket_list       = self.unused_list;
     self.unused_list       = std::ptr::null_mut();
     self.storage_in_use    = 0;
@@ -429,6 +462,8 @@ impl Allocator {
 
     // Garbage Collection for Arenas
 
+    let active_node_count = ACTIVE_NODE_COUNT.load(Relaxed); // updated during mark phase
+    
     // Calculate if we should allocate more arenas to avoid an early gc.
     let node_count = (self.nr_arenas as usize) * ARENA_SIZE;
     GC_COUNT += 1;
@@ -438,12 +473,14 @@ impl Allocator {
       println!("Collection: {}", gc_count);
 
       println!(
-        "Arenas: {}\tNodes: {} ({:.2} MB)\tNow: {} ({:.2} MB)",
+        "Arenas: {}\tNodes: {} ({:.2} MB)\tCollected: {} ({:.2}) MB\tNow: {} ({:.2} MB)",
         self.nr_arenas,
         node_count,
         ((node_count * size_of::<DagNode>()) as f64) / (1024.0 * 1024.0),
-        self.nr_nodes_in_use,
-        ((self.nr_nodes_in_use * size_of::<DagNode>()) as f64) / (1024.0 * 1024.0),
+        old_active_node_count - active_node_count,
+        (((old_active_node_count - active_node_count) * size_of::<DagNode>()) as f64) / (1024.0 * 1024.0),
+        active_node_count,
+        ((active_node_count * size_of::<DagNode>()) as f64) / (1024.0 * 1024.0),
       );
 
       println!(
@@ -465,19 +502,19 @@ impl Allocator {
     }
 
     // Compute slop factor
-    // Case: self.nr_nodes_in_use >= UPPER_BOUND
+    // Case: ACTIVE_NODE_COUNT >= UPPER_BOUND
     let mut slop_factor: f64 = BIG_MODEL_SLOP;
-    if self.nr_nodes_in_use < LOWER_BOUND {
-      // Case: self.nr_nodes_in_use < LOWER_BOUND
+    if ACTIVE_NODE_COUNT.load(Relaxed) < LOWER_BOUND {
+      // Case: ACTIVE_NODE_COUNT < LOWER_BOUND
       slop_factor = SMALL_MODEL_SLOP;
-    } else if self.nr_nodes_in_use < UPPER_BOUND {
-      // Case: LOWER_BOUND <= self.nr_nodes_in_use < UPPER_BOUND
+    } else if ACTIVE_NODE_COUNT.load(Relaxed) < UPPER_BOUND {
+      // Case: LOWER_BOUND <= ACTIVE_NODE_COUNT < UPPER_BOUND
       // Linearly interpolate between the two models.
-      slop_factor += ((UPPER_BOUND - self.nr_nodes_in_use) as f64 * (SMALL_MODEL_SLOP - BIG_MODEL_SLOP)) / (UPPER_BOUND - LOWER_BOUND) as f64;
+      slop_factor += ((UPPER_BOUND - active_node_count) as f64 * (SMALL_MODEL_SLOP - BIG_MODEL_SLOP)) / (UPPER_BOUND - LOWER_BOUND) as f64;
     }
 
     // Allocate new arenas so that we have capacity for at least slop_factor times the actually used nodes.
-    let new_arenas = (self.nr_nodes_in_use as f64 * slop_factor).ceil() as u32;
+    let new_arenas = (active_node_count as f64 * slop_factor).ceil() as u32;
     while self.nr_arenas < new_arenas {
       self.allocate_new_arena();
     }
@@ -634,7 +671,8 @@ impl Allocator {
 
   /// Prints the state of the allocator.
   #[cfg(feature = "gc_debug")]
-  fn dump_memory_variables(&self) {
+  pub fn dump_memory_variables(&self) {
+    eprintln!("--------------------------------------");
     eprintln!(
       "\tnrArenas = {}\n\
             \tnrNodesInUse = {}\n\
@@ -648,7 +686,7 @@ impl Allocator {
             \tlastActiveArena = {:p}\n\
             \tlastActiveNode = {:p}",
       self.nr_arenas,
-      self.nr_nodes_in_use,
+      ACTIVE_NODE_COUNT.load(Relaxed),
       self.current_arena_past_active_arena,
       self.need_to_collect_garbage,
       self.first_arena,
@@ -671,7 +709,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn it_works() {
+  fn test_allocate_dag_node() {
     let mut allocator = Allocator::new();
     let node_ptr = allocator.allocate_dag_node();
     let node_mut = match unsafe { node_ptr.as_mut() } {
@@ -680,8 +718,9 @@ mod tests {
       }
       Some(node) => { node }
     };
-    
+
     node_mut.kind = DagNodeKind::Free;
-    
+
   }
 }
+

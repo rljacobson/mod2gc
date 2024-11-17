@@ -23,22 +23,18 @@ mod flags;
 mod node;
 mod root_container;
 mod arena;
-mod allocator;
+pub mod allocator;
 mod bucket;
 mod node_vector;
+
+pub use node::*;
+pub use flags::*;
+pub use root_container::RootContainer;
 
 /// A `*mut Void` is a pointer to a `u8`
 pub type Void = u8;
 
-// These constants are taken from Maude. It looks like Maude assumes DagNodes are 6 words in size, but ours are 3 words,
-// at least so far.
-pub const ARENA_SIZE: usize        = 5460;              // Arena size in nodes;
-                                                        // 5460 * 6 + 1 + new/malloc_overhead <= 32768 words
-pub const RESERVE_SIZE: usize      = 256;               // If fewer nodes left call GC when allowed
-pub const BUCKET_MULTIPLIER: usize = 8;                 // To determine bucket size for huge allocations
-pub const MIN_BUCKET_SIZE: usize   = 256 * 1024 - 8;    // Bucket size for normal allocations
-pub const INITIAL_TARGET: usize    = 220 * 1024;        // Just under 8/9 of MIN_BUCKET_SIZE
-pub const TARGET_MULTIPLIER: usize = 8;                 // To determine bucket usage target
+// To determine bucket usage target
 
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Default)]

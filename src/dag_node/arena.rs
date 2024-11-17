@@ -1,11 +1,13 @@
 /*!
 
-An arena allocator for `DagNode`s. 
+An arena allocator for `DagNode`s.
 
 */
 
 use std::alloc::{alloc_zeroed, Layout};
-use crate::dag_node::ARENA_SIZE;
+use std::mem::MaybeUninit;
+use std::ptr::null_mut;
+use crate::dag_node::allocator::ARENA_SIZE;
 use crate::dag_node::node::DagNode;
 
 #[repr(align(8))]
@@ -17,12 +19,24 @@ pub struct Arena {
 impl Arena {
   #[inline(always)]
   pub fn allocate_new_arena() -> *mut Arena {
-    unsafe {
-      let chunk: *mut u8 = alloc_zeroed(
-        Layout::from_size_align(size_of::<Arena>(), 8).unwrap()
-      );
-      chunk as *mut Arena
+
+    // Create an uninitialized array
+    let mut data: [MaybeUninit<DagNode>; ARENA_SIZE] = unsafe { MaybeUninit::uninit().assume_init() };
+
+    // Initialize each element
+    for elem in &mut data {
+      unsafe {
+        std::ptr::write(elem.as_mut_ptr(), DagNode::default()); // Replace `DagNode::new()` with your constructor
+      }
     }
+    // Convert the array to an initialized array
+    let data = unsafe { std::mem::transmute::<_, [DagNode; ARENA_SIZE]>(data) };
+    let arena = Box::new(Arena{
+      next_arena: null_mut(),
+      data
+    });
+    
+    Box::into_raw(arena)
   }
 
   #[inline(always)]

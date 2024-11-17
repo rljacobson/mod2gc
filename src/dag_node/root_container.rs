@@ -4,33 +4,40 @@ A `RootContainer` is a linked list of roots of garbage collected objects.
 
 */
 
-use std::sync::atomic::{
-  AtomicPtr,
-  Ordering
+use std::{
+  sync::{
+    atomic::{
+      AtomicPtr,
+      Ordering
+    },
+    Mutex
+  }
 };
-use std::sync::Mutex;
+use std::ptr::NonNull;
+use std::sync::MutexGuard;
 use crate::dag_node::node::DagNode;
 
 static LIST_HEAD: Mutex<AtomicPtr<RootContainer>> = Mutex::new(AtomicPtr::new(std::ptr::null_mut()));
 
+pub fn acquire_root_list() -> MutexGuard<'static, AtomicPtr<RootContainer>> {
+  LIST_HEAD.lock().unwrap()
+}
+
 pub struct RootContainer {
-  next: Option<*mut RootContainer>,
-  prev: Option<*mut RootContainer>,
-  node: Option<*mut DagNode>
+  next: Option<NonNull<RootContainer>>,
+  prev: Option<NonNull<RootContainer>>,
+  node: Option<NonNull<DagNode>>
 }
 
 impl RootContainer {
   pub fn new(node: *mut DagNode) -> RootContainer {
-    let maybe_node = if node.is_null() {
-      None
-    } else {
-      Some(node)
-    };
+    let maybe_node = NonNull::new(node);
     let mut container = RootContainer {
       next: None,
       prev: None,
       node: maybe_node
     };
+    // We only add the container to the linked list if it holds a node.
     if !maybe_node.is_none() {
       container.link();
     }
@@ -39,24 +46,24 @@ impl RootContainer {
 
   pub fn mark(&mut self) {
     unsafe {
-      if let Some(node) = self.node {
-        node.as_mut_unchecked().mark();
+      if let Some(mut node) = self.node {
+        node.as_mut().mark();
       }
     }
   }
 
   pub fn link(&mut self){
-    let list_head = LIST_HEAD.lock().unwrap();
+    let list_head  = acquire_root_list();
     self.prev = None;
     self.next = unsafe {
       list_head.load(Ordering::Relaxed)
                .as_mut()
-               .map(|head| head as *mut RootContainer)
+               .map(|head| NonNull::new(head as *mut RootContainer).unwrap())
     };
 
-    if let Some(next) = self.next {
+    if let Some(mut next) = self.next {
       unsafe {
-        next.as_mut_unchecked().prev = Some(self);
+        next.as_mut().prev = NonNull::new(self);
       }
     }
 
@@ -64,19 +71,19 @@ impl RootContainer {
   }
 
   pub fn unlink(&mut self){
-    let list_head = LIST_HEAD.lock().unwrap();
-    if let Some(next) = self.next {
+    let list_head = acquire_root_list();
+    if let Some(mut next) = self.next {
       unsafe {
-        next.as_mut_unchecked().prev = self.prev;
+        next.as_mut().prev = self.prev;
       }
     }
 
-    if let Some(prev) = self.prev {
+    if let Some(mut prev) = self.prev {
       unsafe {
-        prev.as_mut_unchecked().next = self.next;
+        prev.as_mut().next = self.next;
       }
-    } else if let Some(next) = self.next {
-      list_head.store(next, Ordering::Relaxed);
+    } else if let Some(mut next) = self.next {
+      list_head.store(next.as_ptr(), Ordering::Relaxed);
     } else {
       list_head.store(std::ptr::null_mut(), Ordering::Relaxed);
     }
@@ -94,21 +101,21 @@ impl Drop for RootContainer {
 
 /// Marks all roots in the linked list of `RootContainer`s.
 pub fn mark_roots() {
-  let list_head = LIST_HEAD.lock().unwrap();
+  let list_head = acquire_root_list();
   let mut root = unsafe {
     list_head.load(Ordering::Relaxed)
              .as_mut()
-             .map(|head| head as *mut RootContainer)
+             .map(|head| NonNull::new(head as *mut RootContainer).unwrap())
   };
-  unsafe {
-    loop {
-      match root {
-        None => break,
-        Some(root_ptr) => {
-          let root_ref = root_ptr.as_mut_unchecked();
-          root_ref.mark();
-          root = root_ref.next;
-        }
+
+  loop {
+    match root {
+      None => break,
+      Some(mut root_ptr) => {
+        assert!(!root_ptr.as_ptr().is_null());
+        let root_ref = unsafe{ root_ptr.as_mut() };
+        root_ref.mark();
+        root = root_ref.next;
       }
     }
   }

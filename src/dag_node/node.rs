@@ -7,21 +7,31 @@
 
 use std::{
   marker::PhantomPinned,
-  pin::Pin,
-  cmp::max
+  cmp::max,
+  fmt::{Display, Formatter}
 };
+use std::ptr::null_mut;
 use crate::{
   dag_node::{
     DagNodeKind,
-    flags::{DagNodeFlag, DagNodeFlags},
+    flags::{
+      DagNodeFlag, 
+      DagNodeFlags
+    },
     node_vector::{
       NodeVector,
       NodeVectorMutRef
+    },
+    allocator::{
+      acquire_allocator, 
+      increment_active_node_count
     }
   },
-  symbol::{Symbol, SymbolPtr},
+  symbol::{
+    Symbol, 
+    SymbolPtr
+  },
 };
-use crate::dag_node::allocator::acquire_allocator;
 
 /// Public interface uses `Pin`. We need to be able to have multiple references,
 /// and we occasionally need to mutate the node, so we use `*mut DagNode`
@@ -55,7 +65,7 @@ impl DagNode {
   }
 
   pub fn with_kind(symbol: SymbolPtr, kind: DagNodeKind) -> DagNodePtr {
-    let node: DagNodePtr = acquire_allocator().allocate_dag_node();
+    let node: DagNodePtr = { acquire_allocator().allocate_dag_node() };
     let node_mut         = unsafe { &mut *node };
 
     let arity = unsafe{ &*symbol }.arity as usize;
@@ -73,6 +83,7 @@ impl DagNode {
   }
 
   pub fn with_args(symbol: SymbolPtr, args: &mut Vec<DagNodePtr>, kind: DagNodeKind) -> DagNodePtr {
+    assert!(!symbol.is_null());
     let node: DagNodePtr = acquire_allocator().allocate_dag_node();
     let node_mut         = unsafe { &mut *node };
 
@@ -97,15 +108,6 @@ impl DagNode {
     } else {
       node_mut.args = DagNodeArgument::None;
     };
-
-    if args.is_empty() {
-      node_mut.args = DagNodeArgument::None;
-    } else if args.len() == 1 {
-      node_mut.args = DagNodeArgument::Single(args.pop().unwrap());
-    } else {
-      let node_vector = NodeVector::from_slice(args.as_slice());
-      node_mut.args = DagNodeArgument::Many(node_vector);
-    }
     
     node
   }
@@ -115,11 +117,14 @@ impl DagNode {
   // region Accessors
 
   pub fn iter_children(&self) -> std::slice::Iter<'static, DagNodePtr> {
+    let arity = self.arity();
     match &self.args {
       DagNodeArgument::None => {
+        assert_eq!(arity, 0);
         [].iter()
       }
       DagNodeArgument::Single(node) => {
+        assert_eq!(arity, 1);
         // Make a fat pointer to the single node and return an iterator to it. This allows `self` to 
         // escape the method. Of course, `self` actually points to a `DagNode` that is valid for the 
         // lifetime of the program, so even in the event of the GC equivalent of a dangling pointer 
@@ -128,6 +133,7 @@ impl DagNode {
         v.iter()
       }
       DagNodeArgument::Many(node_vector) => {
+        assert!(arity>1);
         // We need to allow `self` to escape the method, same as `Single(..)` branch.
         let node_vector_ptr: *const NodeVector = *node_vector; 
         unsafe{ &*node_vector_ptr }.iter() 
@@ -136,15 +142,45 @@ impl DagNode {
   }
 
   #[inline(always)]
-  pub fn symbol(&self) -> Pin<&Symbol> {
+  pub fn symbol(&self) -> &Symbol {
     unsafe {
-      Pin::new(&*self.symbol)
+      &*self.symbol
     }
   }
 
   #[inline(always)]
   pub fn arity(&self) -> u8 {
     self.symbol().arity
+  }
+  
+  #[inline(always)]
+  pub fn len(&self) -> usize {
+    match &self.args {
+      DagNodeArgument::None      => 0,
+      DagNodeArgument::Single(_) => 1,
+      DagNodeArgument::Many(v)   => v.len()
+    }
+  }
+  
+  pub fn insert_child(&mut self, new_child: DagNodePtr) -> Result<(), ()>{
+    match self.args {
+      
+      DagNodeArgument::None => {
+        self.args = DagNodeArgument::Single(new_child);
+        Ok(())
+      }
+      
+      DagNodeArgument::Single(first_child) => {
+        let vec   = NodeVector::from_slice(&[first_child, new_child]);
+        self.args = DagNodeArgument::Many(vec);
+        Ok(())
+      }
+      
+      DagNodeArgument::Many(ref mut vec) => {
+        vec.push(new_child)
+      }
+      
+    }
   }
 
   // endregion
@@ -172,9 +208,27 @@ impl DagNode {
 
   #[inline(always)]
   pub fn mark(&mut self) {
+    increment_active_node_count();
     self.flags.insert(DagNodeFlag::Marked);
   }
   //endregion
 
 }
 
+impl Display for DagNode {
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    write!(f, "node<{}>", self.symbol())
+  }
+}
+
+impl Default for DagNode {
+  fn default() -> Self {
+    DagNode{
+      symbol: null_mut(),
+      args: DagNodeArgument::None,
+      kind: Default::default(),
+      flags: Default::default(),
+      _pin: Default::default(),
+    }
+  }
+}

@@ -10,7 +10,7 @@ the symbol `Integer` for example.
 
 */
 
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 use enumflags2::{bitflags, make_bitflags, BitFlags};
 
@@ -62,7 +62,8 @@ impl Symbol {
     //       order. However, it still produces a total order on symbols in which symbols are ordered first
     //       by arity and then arbitrarily (by hash). Ordering by insertion order is just as arbitrary, so
     //       it should be ok.
-    let hash = IString::get_hash(&self.name) | ((self.arity as u32) << 24); // Maude: self.arity << 24
+    // let hash = IString::get_hash(&self.name) | ((self.arity as u32) << 24); // Maude: self.arity << 24
+    let hash = IString::precomputed_hash(&self.name) as u32 | ((self.arity as u32) << 24); // Maude: self.arity << 24
     self.hash_value = hash;
     hash
   }
@@ -80,6 +81,12 @@ impl Display for Symbol {
     //   Arity::Value(arity) if arity > 0 => write!(f, "{}/{}", self.name, arity)
     //   _ => write!(f, "{}", self.name),
     // }
+    write!(f, "{}", self.name)
+  }
+}
+
+impl Debug for Symbol {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     write!(f, "{}", self.name)
   }
 }
