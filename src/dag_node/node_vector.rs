@@ -33,14 +33,14 @@ impl NodeVector {
   pub fn with_capacity(capacity: usize) -> NodeVectorMutRef {
     unsafe {
       let node_vector_ptr: *mut NodeVector =
-          acquire_allocator().allocate_storage(size_of::<NodeVector>()) as *mut NodeVector;
+          { acquire_allocator().allocate_storage(size_of::<NodeVector>()) as *mut NodeVector };
       let node_vector: &mut NodeVector = node_vector_ptr.as_mut_unchecked();
       // Initialize the NodeVector
       node_vector.length   = 0;
       node_vector.capacity = capacity;
       // Allocate the memory slice. Two separate allocations are needed to maintain alignment.
       let needed_memory    = capacity * size_of::<DagNodePtr>();
-      let data_ptr         = acquire_allocator().allocate_storage(needed_memory) as *mut DagNodePtr;
+      let data_ptr         = { acquire_allocator().allocate_storage(needed_memory) as *mut DagNodePtr };
       node_vector.data     = std::slice::from_raw_parts_mut(data_ptr, capacity);
 
       // Pin::new_unchecked(node_vector)

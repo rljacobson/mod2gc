@@ -7,9 +7,6 @@ mod abstractions;
 mod dag_node;
 mod util;
 
-pub fn add(left: u64, right: u64) -> u64 {
-  left + right
-}
 
 #[cfg(test)]
 mod tests {
@@ -71,16 +68,15 @@ mod tests {
           Symbol::new(name, x)
         })
         .collect::<Vec<_>>();
+    
+    let root: DagNodePtr = DagNode::new(&symbols[5]);
+    println!("root: {:p}", root);
 
-    let root = DagNode::new(&symbols[2]);
     let root_container = RootContainer::new(root);
 
     // Maximum tree height
-    const max_height: usize = 7;
-    const max_width : usize = 7;
-
-    std::io::stdout().flush().unwrap();
-    std::io::stderr().flush().unwrap();
+    const max_height: usize = 6;
+    const max_width : usize = 5;
 
     // Recursively build the random tree
     build_random_tree(&symbols, root, max_height, max_width);

@@ -14,13 +14,18 @@ use std::{
   }
 };
 use std::ptr::NonNull;
-use std::sync::MutexGuard;
+use std::sync::{MutexGuard, TryLockResult};
 use crate::dag_node::node::DagNode;
 
 static LIST_HEAD: Mutex<AtomicPtr<RootContainer>> = Mutex::new(AtomicPtr::new(std::ptr::null_mut()));
 
 pub fn acquire_root_list() -> MutexGuard<'static, AtomicPtr<RootContainer>> {
-  LIST_HEAD.lock().unwrap()
+  match LIST_HEAD.try_lock() {
+    Ok(lock) => { lock }
+    Err(_) => {
+      panic!("Deadlocked acquiring root list.")
+    }
+  }
 }
 
 pub struct RootContainer {
@@ -29,14 +34,19 @@ pub struct RootContainer {
   node: Option<NonNull<DagNode>>
 }
 
+unsafe impl Send for RootContainer {}
+
 impl RootContainer {
-  pub fn new(node: *mut DagNode) -> RootContainer {
-    let maybe_node = NonNull::new(node);
-    let mut container = RootContainer {
+  pub fn new(node: *mut DagNode) -> Box<RootContainer> {
+    assert!(!node.is_null());
+    println!("new root node at {:p}", node);
+    
+    let maybe_node: Option<NonNull<DagNode>> = NonNull::new(node);
+    let mut container = Box::new(RootContainer {
       next: None,
       prev: None,
       node: maybe_node
-    };
+    });
     // We only add the container to the linked list if it holds a node.
     if !maybe_node.is_none() {
       container.link();
@@ -47,6 +57,7 @@ impl RootContainer {
   pub fn mark(&mut self) {
     unsafe {
       if let Some(mut node) = self.node {
+        println!("marking root node at {:p}", node.as_ptr());
         node.as_mut().mark();
       }
     }
@@ -55,11 +66,7 @@ impl RootContainer {
   pub fn link(&mut self){
     let list_head  = acquire_root_list();
     self.prev = None;
-    self.next = unsafe {
-      list_head.load(Ordering::Relaxed)
-               .as_mut()
-               .map(|head| NonNull::new(head as *mut RootContainer).unwrap())
-    };
+    self.next = unsafe { NonNull::new(*list_head.as_ptr()) };
 
     if let Some(mut next) = self.next {
       unsafe {

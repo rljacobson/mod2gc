@@ -204,7 +204,7 @@ impl Allocator {
 
     unsafe{
       loop {
-        if current_node == self.end_pointer {
+        if (current_node.is_null() && self.end_pointer.is_null()) || current_node == self.end_pointer {
           // Arena is full. Allocate a new one.
           current_node = self.slow_new_dag_node();
           break;
@@ -276,7 +276,7 @@ impl Allocator {
         let first_node     = arena.first_node();
         // The last arena in the linked list is given a reserve.
         self.end_pointer   = first_node.add(ARENA_SIZE - RESERVE_SIZE);
-
+        
         return first_node;
       }
 
@@ -437,13 +437,13 @@ impl Allocator {
     self.check_arenas();
 
     // Mark phase
-    
+
     let old_active_node_count = ACTIVE_NODE_COUNT.load(Relaxed);
     ACTIVE_NODE_COUNT.store(0, Relaxed); // to be updated during mark phase.
-    
+
     // Prep bucket storage for sweep
     let old_storage_in_use = self.storage_in_use;
-    let bucket             = self.bucket_list;
+    let mut bucket         = self.bucket_list;
     self.bucket_list       = self.unused_list;
     self.unused_list       = std::ptr::null_mut();
     self.storage_in_use    = 0;
@@ -457,13 +457,14 @@ impl Allocator {
       let bucket_mut        = bucket.as_mut_unchecked();
       bucket_mut.bytes_free = bucket_mut.nr_bytes;
       bucket_mut.next_free  = bucket.add(1) as *mut Void;
+      bucket = bucket_mut.next_bucket;
     }
     self.target = max(self.target, TARGET_MULTIPLIER*self.storage_in_use);
 
     // Garbage Collection for Arenas
 
     let active_node_count = ACTIVE_NODE_COUNT.load(Relaxed); // updated during mark phase
-    
+
     // Calculate if we should allocate more arenas to avoid an early gc.
     let node_count = (self.nr_arenas as usize) * ARENA_SIZE;
     GC_COUNT += 1;

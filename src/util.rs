@@ -3,6 +3,7 @@ Utilities to build and print random trees
 
 */
 use std::fmt::Display;
+use std::io::Write;
 use rand::Rng;
 use crate::dag_node::{DagNode, DagNodePtr};
 use crate::dag_node::allocator::acquire_allocator;
@@ -14,12 +15,16 @@ use crate::symbol::Symbol;
 /// - `parent`: Pointer to the current parent node.
 /// - `max_height`: Maximum allowed height for the tree.
 pub fn build_random_tree(symbols: &[Symbol], parent: DagNodePtr, max_height: usize, max_width: usize) {
-  acquire_allocator().ok_to_collect_garbage();
+  if max_width == 6 {
+    acquire_allocator().dump_memory_variables();
+    std::io::stdout().flush().unwrap();
+  }
+  { acquire_allocator().ok_to_collect_garbage(); }
   if max_height == 0 {
     return; // Reached the maximum depth
   }
 
-  let mut rng = rand::thread_rng();
+  // let mut rng = rand::thread_rng();
 
   // Get the parent node's arity from its symbol
   let parent_arity = unsafe { (*parent).arity() };
@@ -30,7 +35,8 @@ pub fn build_random_tree(symbols: &[Symbol], parent: DagNodePtr, max_height: usi
     let child_arity = if max_height == 1 {
       0 // Leaf nodes must have arity 0
     } else {
-      rng.gen_range(0..=max_width) // Random arity between 0 and 10
+      // rng.gen_range(0..=max_width) // Random arity between 0 and 10
+      max_width
     };
 
     // Create the child node with the symbol corresponding to its arity

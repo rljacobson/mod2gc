@@ -15,7 +15,7 @@ use crate::{
   dag_node::{
     DagNodeKind,
     flags::{
-      DagNodeFlag, 
+      DagNodeFlag,
       DagNodeFlags
     },
     node_vector::{
@@ -23,12 +23,12 @@ use crate::{
       NodeVectorMutRef
     },
     allocator::{
-      acquire_allocator, 
+      acquire_allocator,
       increment_active_node_count
     }
   },
   symbol::{
-    Symbol, 
+    Symbol,
     SymbolPtr
   },
 };
@@ -78,13 +78,12 @@ impl DagNode {
     } else {
       DagNodeArgument::None
     };
-
     node
   }
 
   pub fn with_args(symbol: SymbolPtr, args: &mut Vec<DagNodePtr>, kind: DagNodeKind) -> DagNodePtr {
     assert!(!symbol.is_null());
-    let node: DagNodePtr = acquire_allocator().allocate_dag_node();
+    let node: DagNodePtr = { acquire_allocator().allocate_dag_node() };
     let node_mut         = unsafe { &mut *node };
 
     node_mut.kind   = kind;
@@ -108,7 +107,7 @@ impl DagNode {
     } else {
       node_mut.args = DagNodeArgument::None;
     };
-    
+
     node
   }
 
@@ -125,18 +124,18 @@ impl DagNode {
       }
       DagNodeArgument::Single(node) => {
         assert_eq!(arity, 1);
-        // Make a fat pointer to the single node and return an iterator to it. This allows `self` to 
-        // escape the method. Of course, `self` actually points to a `DagNode` that is valid for the 
-        // lifetime of the program, so even in the event of the GC equivalent of a dangling pointer 
-        // or use after free, this will be safe. (Strictly speaking, it's probably UB.) 
+        // Make a fat pointer to the single node and return an iterator to it. This allows `self` to
+        // escape the method. Of course, `self` actually points to a `DagNode` that is valid for the
+        // lifetime of the program, so even in the event of the GC equivalent of a dangling pointer
+        // or use after free, this will be safe. (Strictly speaking, it's probably UB.)
         let v = unsafe { std::slice::from_raw_parts(node, 1) };
         v.iter()
       }
       DagNodeArgument::Many(node_vector) => {
         assert!(arity>1);
         // We need to allow `self` to escape the method, same as `Single(..)` branch.
-        let node_vector_ptr: *const NodeVector = *node_vector; 
-        unsafe{ &*node_vector_ptr }.iter() 
+        let node_vector_ptr: *const NodeVector = *node_vector;
+        unsafe{ &*node_vector_ptr }.iter()
       }
     }
   }
@@ -152,7 +151,7 @@ impl DagNode {
   pub fn arity(&self) -> u8 {
     self.symbol().arity
   }
-  
+
   #[inline(always)]
   pub fn len(&self) -> usize {
     match &self.args {
@@ -161,25 +160,25 @@ impl DagNode {
       DagNodeArgument::Many(v)   => v.len()
     }
   }
-  
+
   pub fn insert_child(&mut self, new_child: DagNodePtr) -> Result<(), ()>{
     match self.args {
-      
+
       DagNodeArgument::None => {
         self.args = DagNodeArgument::Single(new_child);
         Ok(())
       }
-      
+
       DagNodeArgument::Single(first_child) => {
         let vec   = NodeVector::from_slice(&[first_child, new_child]);
         self.args = DagNodeArgument::Many(vec);
         Ok(())
       }
-      
+
       DagNodeArgument::Many(ref mut vec) => {
         vec.push(new_child)
       }
-      
+
     }
   }
 
@@ -207,9 +206,42 @@ impl DagNode {
   }
 
   #[inline(always)]
-  pub fn mark(&mut self) {
+  pub fn mark(&'static mut self) {
+    if self.flags.contains(DagNodeFlag::Marked) {
+      return;
+    }
+    
     increment_active_node_count();
     self.flags.insert(DagNodeFlag::Marked);
+
+    // Temporarily replace `self.args` with a placeholder
+    let current_args = std::mem::replace(&mut self.args, DagNodeArgument::None);
+    match current_args {
+
+      DagNodeArgument::None => { /* pass */ }
+
+      DagNodeArgument::Single(node) => {
+        if let Some(node) = unsafe { node.as_mut() } {
+          node.mark();
+        }
+        self.args = DagNodeArgument::Single(node);
+      }
+
+      DagNodeArgument::Many(node_vec) => {
+        for node in node_vec.iter() {
+          if let Some(node) = unsafe { node.as_mut() } {
+            node.mark();
+          } else { 
+            eprintln!("Bad node found.")
+          }
+        }
+        // Reallocate
+        let node_vec = node_vec.shallow_copy();
+        self.args = DagNodeArgument::Many(node_vec);
+      }
+
+    }
+
   }
   //endregion
 
