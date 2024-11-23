@@ -39,7 +39,6 @@ unsafe impl Send for RootContainer {}
 impl RootContainer {
   pub fn new(node: *mut DagNode) -> Box<RootContainer> {
     assert!(!node.is_null());
-    println!("new root node at {:p}", node);
     
     let maybe_node: Option<NonNull<DagNode>> = NonNull::new(node);
     let mut container = Box::new(RootContainer {
@@ -57,7 +56,6 @@ impl RootContainer {
   pub fn mark(&mut self) {
     unsafe {
       if let Some(mut node) = self.node {
-        println!("marking root node at {:p}", node.as_ptr());
         node.as_mut().mark();
       }
     }

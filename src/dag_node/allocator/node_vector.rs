@@ -24,12 +24,12 @@ pub type NodeVectorRef    = &'static NodeVector;
 
 
 pub struct NodeVector {
-  length:   usize,
+  length  : usize,
   capacity: usize,
-  data:     &'static mut [DagNodePtr],
+  data    : &'static mut [DagNodePtr],
 
   // Opt out of `Unpin`
-  _pin: PhantomPinned,
+  _pin    : PhantomPinned,
 }
 
 
@@ -133,11 +133,14 @@ impl NodeVector {
 
   /// Pushes the given node onto the (end) of the vector if there is enough capacity.
   pub fn push(&mut self, node: DagNodePtr) -> Result<(), String> {
-    if self.length >= self.capacity {
-
+    if self.length >= self.capacity 
+        || self.data.len() > self.capacity
+        || self.data.len() <= self.length
+    {
+      panic!("node_vec.len: {}, capacity: {}, data.len: {}", self.length, self.capacity, self.data.len());
       // acquire_allocator().dump_memory_variables(); // Can cause deadlock
-      
-      return Err(format!("node_vec.len: {}, capacity: {}", self.length, self.capacity));
+
+      return Err(format!("node_vec.len: {}, capacity: {}, data.len: {}", self.length, self.capacity, self.data.len()));
     }
 
     self.data[self.length] = node;

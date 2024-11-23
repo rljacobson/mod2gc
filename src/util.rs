@@ -19,13 +19,23 @@ use crate::{
 /// - `symbols`: List of `Symbol` objects.
 /// - `parent`: Pointer to the current parent node.
 /// - `max_height`: Maximum allowed height for the tree.
-pub fn build_random_tree(symbols: &[Symbol], parent: DagNodePtr, max_height: usize, max_width: usize) {
+pub fn build_random_tree(
+  symbols   : &[Symbol],
+  parent    : DagNodePtr,
+  max_height: usize,
+  max_width : usize,
+  min_width : usize,
+) {
   { acquire_node_allocator("ok_to_collect_garbage").ok_to_collect_garbage(); }
   if max_height == 0 {
     return; // Reached the maximum depth
   }
-
-  let mut rng = rand::thread_rng();
+  
+  // idiot-proof
+  let min_width = std::cmp::min(max_width, min_width);
+  let max_width = std::cmp::max(max_width, min_width);
+  
+  let mut rng   = rand::thread_rng();
 
   // Get the parent node's arity from its symbol
   let parent_arity = unsafe { (*parent).arity() };
@@ -36,13 +46,12 @@ pub fn build_random_tree(symbols: &[Symbol], parent: DagNodePtr, max_height: usi
     let child_arity = if max_height == 1 {
       0 // Leaf nodes must have arity 0
     } else {
-      rng.gen_range(0..=max_width) // Random arity between 0 and 10
-      // max_width
+      rng.gen_range(min_width..=max_width) // Random arity between min_width and max_width
     };
 
     // Create the child node with the symbol corresponding to its arity
     let child_symbol = &symbols[child_arity];
-    let child_node = DagNode::new(child_symbol);
+    let child_node   = DagNode::new(child_symbol);
 
     // Insert the child into the parent node
     unsafe {
@@ -52,7 +61,7 @@ pub fn build_random_tree(symbols: &[Symbol], parent: DagNodePtr, max_height: usi
     }
 
     // Recursively build the subtree for the child
-    build_random_tree(symbols, child_node, max_height - 1, max_width);
+    build_random_tree(symbols, child_node, max_height - 1, max_width, min_width);
   }
 }
 

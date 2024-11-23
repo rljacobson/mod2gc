@@ -96,7 +96,7 @@ impl NodeAllocator {
       early_quit : 0,
       arena_count: 0,
 
-      current_arena_past_active_arena: false,
+      current_arena_past_active_arena: true,
       need_to_collect_garbage        : false,
 
       first_arena      : std::ptr::null_mut(),
@@ -208,8 +208,9 @@ impl NodeAllocator {
         // The last arena in the linked list is given a reserve.
         self.end_pointer   = first_node.add(ARENA_SIZE - RESERVE_SIZE);
         
-        self.last_active_arena = arena;
-        self.last_active_node  = first_node;
+        // These two members are initialized on first call to `NodeAllocator::sweep_arenas()`.
+        // self.last_active_arena = arena;
+        // self.last_active_node  = first_node;
 
         return first_node;
       }
@@ -295,6 +296,13 @@ impl NodeAllocator {
       return;
     }
 
+    GC_COUNT += 1;
+    let gc_count = GC_COUNT; // To silence shared_mut_ref warning
+    if self.show_gc {
+      // We moved this up here so that it appears before the bucket storage statistics.
+      println!("Collection: {}", gc_count);
+    }
+
     self.sweep_arenas();
     #[cfg(feature = "gc_debug")]
     self.check_arenas();
@@ -311,34 +319,52 @@ impl NodeAllocator {
     acquire_storage_allocator()._sweep_garbage();
 
     // Garbage Collection for Arenas
-
     let active_node_count = active_node_count(); // updated during mark phase
 
-    // Calculate if we should allocate more arenas to avoid an early gc.
     let node_capacity = (self.arena_count as usize) * ARENA_SIZE;
-    GC_COUNT += 1;
-    let gc_count = GC_COUNT; // To silence shared_mut_ref warning
-
+    
     if self.show_gc {
-      println!("Collection: {}", gc_count);
-
+      // println!(
+      //   "Arenas: {}\tNodes: {} ({:.2} MB)\tCollected: {} ({:.2}) MB\tNow: {} ({:.2} MB)",
+      //   self.arena_count,
+      //   node_capacity,
+      //   ((node_capacity * size_of::<DagNode>()) as f64) / (1024.0 * 1024.0),
+      //   old_active_node_count - active_node_count,
+      //   (((old_active_node_count - active_node_count) * size_of::<DagNode>() ) as f64) / (1024.0 * 1024.0),
+      //   active_node_count,
+      //   ((active_node_count * size_of::<DagNode>()) as f64) / (1024.0 * 1024.0),
+      // );
       println!(
-        "Arenas: {}\tNodes: {} ({:.2} MB)\tCollected: {} ({:.2}) MB\tNow: {} ({:.2} MB)",
+        "{:<10} {:<10} {:<10} {:<10} {:<13} {:<10} {:<10} {:<10} {:<10}",
+        "Arenas",
+        "Nodes",
+        "Size (MB)",
+        "In use",
+        "In use (MB)",
+        "Collected",
+        "Col. (MB)",
+        "Now",
+        "Now (MB)"
+      );
+      println!(
+        "{:<10} {:<10} {:<10.2} {:<10} {:<13.2} {:<10} {:<10.2} {:<10} {:<10.2}",
         self.arena_count,
         node_capacity,
         ((node_capacity * size_of::<DagNode>()) as f64) / (1024.0 * 1024.0),
+        old_active_node_count,
+        (((old_active_node_count) * size_of::<DagNode>()) as f64) / (1024.0 * 1024.0),
         old_active_node_count - active_node_count,
-        (((old_active_node_count - active_node_count) * size_of::<DagNode>() ) as f64) / (1024.0 * 1024.0),
+        (((old_active_node_count - active_node_count) * size_of::<DagNode>()) as f64) / (1024.0 * 1024.0),
         active_node_count,
         ((active_node_count * size_of::<DagNode>()) as f64) / (1024.0 * 1024.0),
       );
-
     }
 
     if GC_COUNT == self.early_quit{
       std::process::exit(0);
     }
 
+    // Calculate if we should allocate more arenas to avoid an early gc.
     // Compute slop factor
     // Case: ACTIVE_NODE_COUNT >= UPPER_BOUND
     let mut slop_factor: f64 = BIG_MODEL_SLOP;
@@ -352,11 +378,11 @@ impl NodeAllocator {
     }
 
     // Allocate new arenas so that we have capacity for at least slop_factor times the actually used nodes.
-    let new_arenas = (active_node_count as f64 * slop_factor / (ARENA_SIZE as f64)).ceil() as u32;
-    // let new_arenas = 2;
+    let ideal_arena_count = (active_node_count as f64 * slop_factor / (ARENA_SIZE as f64)).ceil() as u32;
+    
     #[cfg(feature = "gc_debug")]
-    println!("new_arenas: {}", new_arenas);
-    while self.arena_count < new_arenas {
+    println!("ideal_arena_count: {}", ideal_arena_count);
+    while self.arena_count < ideal_arena_count {
       self.allocate_new_arena();
     }
 
@@ -397,6 +423,8 @@ impl NodeAllocator {
     // self.next_node never points to first node, so subtract 1.
     let mut new_last_active_node  = self.next_node.sub(1);
 
+    // `NodeAllocator::current_arena_past_active_arena` is initialized to `true`, so this whole method
+    // effectively just initializes `last_active_arena` and `last_active_node`.
     if !self.current_arena_past_active_arena {
       // First tidy arenas from current up to last_active.
       let mut node_cursor_ptr: *mut DagNode = self.next_node;
@@ -515,11 +543,75 @@ impl NodeAllocator {
   /// Prints the state of the allocator.
   #[cfg(feature = "gc_debug")]
   pub fn dump_memory_variables(&self) {
+    let bucket_needs_collection = acquire_storage_allocator().want_to_collect_garbage();
+
+    //────────
+    eprintln!("┌─────────────────────────────────────────────┐");
+    eprintln!("│{:<32} {:>12}│", "Variable", "Value");
+    eprintln!("├─────────────────────────────────────────────┤");
+    eprintln!("│{:<32} {:>12}│", "arena_count", self.arena_count);
+    eprintln!("│{:<32} {:>12}│", "active_node_count", ACTIVE_NODE_COUNT.load(Relaxed));
+    eprintln!("│{:<32} {:>12}│", "need_to_collect_garbage", self.need_to_collect_garbage);
+    eprintln!(
+      "│{:<32} {:>12}│",
+      "need_to_collect_storage",
+      bucket_needs_collection
+    );
+    eprintln!(
+      "│{:<32} {:>12}│",
+      "current_arena_past_active_arena",
+      self.current_arena_past_active_arena
+    );
+    eprintln!(
+      "│{:<32} {:>12}│",
+      "need_to_collect_garbage",
+      self.need_to_collect_garbage
+    );
+    eprintln!(
+      "│{:<32} {:>12p}│",
+      "first_arena",
+      self.first_arena
+    );
+    eprintln!(
+      "│{:<32} {:>12p}│",
+      "last_arena",
+      self.last_arena
+    );
+    eprintln!(
+      "│{:<32} {:>12p}│",
+      "current_arena",
+      self.current_arena
+    );
+    eprintln!(
+      "│{:<32} {:>12p}│",
+      "next_node",
+      self.next_node
+    );
+    eprintln!(
+      "│{:<32} {:>12p}│",
+      "end_pointer",
+      self.end_pointer
+    );
+    eprintln!(
+      "│{:<32} {:>12p}│",
+      "last_active_arena",
+      self.last_active_arena
+    );
+    eprintln!(
+      "│{:<32} {:>12p}│",
+      "last_active_node",
+      self.last_active_node
+    );
+    eprintln!("└─────────────────────────────────────────────┘");
+  }
+/*  pub fn dump_memory_variables(&self) {
+    let bucket_needs_collection = acquire_storage_allocator().want_to_collect_garbage();
     eprintln!("--------------------------------------");
     eprintln!(
-      "\tnrArenas = {}\n\
+      "\tarena_count = {}\n\
             \tactive_node_count = {}\n\
             \tneed_to_collect_garbage = {}\n\
+            \tneed_to_collect_storage = {}\n\
             \tcurrent_arena_past_active_arena = {}\n\
             \tneed_to_collect_garbage = {}\n\
             \tfirst_arena = {:p}\n\
@@ -532,6 +624,7 @@ impl NodeAllocator {
       self.arena_count,
       ACTIVE_NODE_COUNT.load(Relaxed),
       self.need_to_collect_garbage,
+      bucket_needs_collection,
       self.current_arena_past_active_arena,
       self.need_to_collect_garbage,
       self.first_arena,
@@ -542,7 +635,7 @@ impl NodeAllocator {
       self.last_active_arena,
       self.last_active_node
     );
-  }
+  }*/
 
 }
 
@@ -567,6 +660,7 @@ mod tests {
   use crate::dag_node::allocator::*;
   use crate::dag_node::allocator::NodeAllocator;
   use crate::symbol::Symbol;
+  use crate::util::{build_random_tree, print_tree};
 
   #[test]
   fn test_allocate_dag_node() {
@@ -581,6 +675,61 @@ mod tests {
 
     node_mut.kind = DagNodeKind::Free;
   }
+
+
+  #[test]
+  fn test_dag_creation() {
+    let symbols = (0..=10)
+        .map(|x| {
+          let name = IString::from(format!("sym({})", x).as_str());
+          Symbol::new(name, x)
+        })
+        .collect::<Vec<_>>();
+
+    let root = DagNode::new(&symbols[3]);
+    let root_container = RootContainer::new(root);
+
+    // Maximum tree height
+    const max_height: usize = 6;
+    const max_width : usize = 4;
+
+    // Recursively build the random tree
+    build_random_tree(&symbols, root, max_height, max_width, 0);
+    print_tree(root, String::new(), false);
+    // println!("Symbols: {:?}", symbols);
+    acquire_node_allocator("dump_memory_variables").dump_memory_variables()
+  }
+
+
+  #[test]
+  fn test_garbage_collection() {
+    let symbols = (0..=10)
+        .map(|x| {
+          let name = IString::from(format!("sym({})", x).as_str());
+          Symbol::new(name, x)
+        })
+        .collect::<Vec<_>>();
+
+    for _ in 0..100 {
+      let mut root_vec = Vec::with_capacity(10);
+      
+      for _ in 0..10 {
+        let root: DagNodePtr = DagNode::new(&symbols[4]);
+        let root_container = RootContainer::new(root);
+        root_vec.push(root_container);
+
+        // Maximum tree height
+        const max_height: usize = 6; // exponent
+        const max_width : usize = 4; // base
+
+        // Recursively build the random tree
+        build_random_tree(&symbols, root, max_height, max_width, 0);
+      }
+      // root_vec dropped
+    }
+      acquire_node_allocator("dump_memory_variables").dump_memory_variables()
+  }
+
 
   #[test]
   fn test_arena_exhaustion() {

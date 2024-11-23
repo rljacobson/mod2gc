@@ -187,7 +187,7 @@ impl StorageAllocator {
     self.total_bytes_allocated += byte_count;
     // Initialize the bucket
     let bucket_mut          = bucket.as_mut_unchecked();
-    bucket_mut.nr_bytes     = byte_count;
+    bucket_mut.byte_count = byte_count;
     bucket_mut.bytes_free   = byte_count - bytes_needed;
     bucket_mut.next_free    = t.add(bytes_needed);
     // Put it at the head of the bucket linked list
@@ -214,15 +214,27 @@ impl StorageAllocator {
     self.unused_list = bucket;
     while !bucket.is_null() {
       let bucket_mut        = bucket.as_mut_unchecked();
-      bucket_mut.bytes_free = bucket_mut.nr_bytes;
+      bucket_mut.bytes_free = bucket_mut.byte_count;
       bucket_mut.next_free  = bucket.add(1) as *mut Void;
-      bucket = bucket_mut.next_bucket;
+      bucket                = bucket_mut.next_bucket;
     }
     self.target = max(self.target, TARGET_MULTIPLIER*self.storage_in_use);
 
     if self.show_gc {
       println!(
-        "Buckets: {}\tBytes: {} ({:.2} MB)\tIn use: {} ({:.2} MB)\tCollected: {} ({:.2} MB)\tNow: {} ({:.2} MB)",
+        "{:<10} {:<10} {:<10} {:<10} {:<13} {:<10} {:<10} {:<10} {:<10}",
+        "Buckets",
+        "Bytes",
+        "Size (MB)",
+        "In use",
+        "In use (MB)",
+        "Collected",
+        "Col. (MB)",
+        "Now",
+        "Now (MB)"
+      );
+      println!(
+        "{:<10} {:<10} {:<10.2} {:<10} {:<13.2} {:<10} {:<10.2} {:<10.2}  {:<10.2}",
         self.bucket_count,
         self.total_bytes_allocated,
         (self.total_bytes_allocated as f64) / (1024.0 * 1024.0),
