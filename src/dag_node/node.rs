@@ -6,31 +6,28 @@
 */
 
 use std::{
-  marker::PhantomPinned,
   cmp::max,
-  fmt::{Display, Formatter}
+  fmt::{Display, Formatter},
+  marker::PhantomPinned
 };
 use std::ptr::null_mut;
 use crate::{
   dag_node::{
-    DagNodeKind,
     flags::{
       DagNodeFlag,
       DagNodeFlags
     },
-    node_vector::{
-      NodeVector,
-      NodeVectorMutRef
-    },
-    allocator::{
-      acquire_allocator,
-      increment_active_node_count
-    }
+    DagNodeKind
   },
   symbol::{
     Symbol,
     SymbolPtr
   },
+};
+use crate::dag_node::allocator::{acquire_node_allocator, increment_active_node_count};
+use crate::dag_node::allocator::node_vector::{
+  NodeVector,
+  NodeVectorMutRef
 };
 
 /// Public interface uses `Pin`. We need to be able to have multiple references,
@@ -65,7 +62,7 @@ impl DagNode {
   }
 
   pub fn with_kind(symbol: SymbolPtr, kind: DagNodeKind) -> DagNodePtr {
-    let node: DagNodePtr = { acquire_allocator().allocate_dag_node() };
+    let node: DagNodePtr = { acquire_node_allocator("DagNode::with_kind").allocate_dag_node() };
     let node_mut         = unsafe { &mut *node };
 
     let arity = unsafe{ &*symbol }.arity as usize;
@@ -83,7 +80,7 @@ impl DagNode {
 
   pub fn with_args(symbol: SymbolPtr, args: &mut Vec<DagNodePtr>, kind: DagNodeKind) -> DagNodePtr {
     assert!(!symbol.is_null());
-    let node: DagNodePtr = { acquire_allocator().allocate_dag_node() };
+    let node: DagNodePtr = { acquire_node_allocator("DagNode::with_args").allocate_dag_node() };
     let node_mut         = unsafe { &mut *node };
 
     node_mut.kind   = kind;
@@ -161,7 +158,7 @@ impl DagNode {
     }
   }
 
-  pub fn insert_child(&mut self, new_child: DagNodePtr) -> Result<(), ()>{
+  pub fn insert_child(&mut self, new_child: DagNodePtr) -> Result<(), String>{
     match self.args {
 
       DagNodeArgument::None => {
@@ -210,7 +207,7 @@ impl DagNode {
     if self.flags.contains(DagNodeFlag::Marked) {
       return;
     }
-    
+
     increment_active_node_count();
     self.flags.insert(DagNodeFlag::Marked);
 
@@ -231,7 +228,7 @@ impl DagNode {
         for node in node_vec.iter() {
           if let Some(node) = unsafe { node.as_mut() } {
             node.mark();
-          } else { 
+          } else {
             eprintln!("Bad node found.")
           }
         }

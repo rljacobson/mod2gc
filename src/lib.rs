@@ -11,13 +11,11 @@ mod util;
 #[cfg(test)]
 mod tests {
   use std::io::Write;
-  use rand::Rng;
   use crate::abstractions::IString;
   use crate::symbol::Symbol;
   use crate::dag_node::{DagNode, DagNodePtr, RootContainer};
-  use crate::dag_node::allocator::acquire_allocator;
+  use crate::dag_node::allocator::acquire_node_allocator;
   use crate::util::{build_random_tree, print_tree};
-  use super::*;
 
   #[test]
   fn test_symbols(){
@@ -27,12 +25,12 @@ mod tests {
           Symbol::new(name, x)
         })
         .collect::<Vec<_>>();
-    
+
     for symbol in symbols {
       println!("{}", symbol);
     }
   }
-  
+
   #[test]
   fn test_dag_creation() {
     let symbols = (0..=10)
@@ -44,7 +42,7 @@ mod tests {
 
     let root = DagNode::new(&symbols[2]);
     let root_container = RootContainer::new(root);
-    
+
     // Maximum tree height
     const max_height: usize = 6;
     const max_width : usize = 3;
@@ -56,7 +54,7 @@ mod tests {
     build_random_tree(&symbols, root, max_height, max_width);
     print_tree(root, String::new(), false);
     // println!("Symbols: {:?}", symbols);
-    acquire_allocator().dump_memory_variables()
+    acquire_node_allocator("dump_memory_variables").dump_memory_variables()
   }
 
 
@@ -68,21 +66,21 @@ mod tests {
           Symbol::new(name, x)
         })
         .collect::<Vec<_>>();
-    
+
     let root: DagNodePtr = DagNode::new(&symbols[5]);
     println!("root: {:p}", root);
 
     let root_container = RootContainer::new(root);
 
     // Maximum tree height
-    const max_height: usize = 6;
-    const max_width : usize = 5;
+    const max_height: usize = 6; // exponent
+    const max_width : usize = 6; // base
 
     // Recursively build the random tree
     build_random_tree(&symbols, root, max_height, max_width);
     // print_tree(root, String::new(), false);
     // println!("Symbols: {:?}", symbols);
-    acquire_allocator().dump_memory_variables()
+    acquire_node_allocator("dump_memory_variables").dump_memory_variables()
   }
 
 }

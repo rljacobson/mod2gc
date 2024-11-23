@@ -1,20 +1,27 @@
 /*!
 
-A vector allocated from Bucket memory.
+A vector allocated from Bucket storage.
 
 */
 
 use std::{
   ops::{Index, IndexMut},
-  // pin::Pin,
   marker::PhantomPinned
 };
-use std::cmp::min;
-use crate::dag_node::allocator::acquire_allocator;
-use crate::dag_node::node::DagNodePtr;
 
-pub type NodeVectorMutRef = &'static mut NodeVector; //Pin<&'static mut NodeVector>;
-pub type NodeVectorRef    = &'static NodeVector;     //Pin<&'static NodeVector>;
+use std::cmp::min;
+
+use crate::{
+  dag_node::{
+    allocator::storage_allocator::acquire_storage_allocator,
+    node::DagNodePtr
+  }
+};
+
+
+pub type NodeVectorMutRef = &'static mut NodeVector;
+pub type NodeVectorRef    = &'static NodeVector;
+
 
 pub struct NodeVector {
   length:   usize,
@@ -25,6 +32,7 @@ pub struct NodeVector {
   _pin: PhantomPinned,
 }
 
+
 impl NodeVector {
 
   // region Constructors
@@ -33,17 +41,18 @@ impl NodeVector {
   pub fn with_capacity(capacity: usize) -> NodeVectorMutRef {
     unsafe {
       let node_vector_ptr: *mut NodeVector =
-          { acquire_allocator().allocate_storage(size_of::<NodeVector>()) as *mut NodeVector };
-      let node_vector: &mut NodeVector = node_vector_ptr.as_mut_unchecked();
+          { acquire_storage_allocator().allocate_storage(size_of::<NodeVector>()) as *mut NodeVector };
+      let node_vector: &mut NodeVector     = node_vector_ptr.as_mut_unchecked();
+
       // Initialize the NodeVector
       node_vector.length   = 0;
       node_vector.capacity = capacity;
+
       // Allocate the memory slice. Two separate allocations are needed to maintain alignment.
       let needed_memory    = capacity * size_of::<DagNodePtr>();
-      let data_ptr         = { acquire_allocator().allocate_storage(needed_memory) as *mut DagNodePtr };
+      let data_ptr         = { acquire_storage_allocator().allocate_storage(needed_memory) as *mut DagNodePtr };
       node_vector.data     = std::slice::from_raw_parts_mut(data_ptr, capacity);
 
-      // Pin::new_unchecked(node_vector)
       node_vector
     }
   }
@@ -123,12 +132,12 @@ impl NodeVector {
   pub fn is_empty(&self) -> bool { self.len() == 0 }
 
   /// Pushes the given node onto the (end) of the vector if there is enough capacity.
-  pub fn push(&mut self, node: DagNodePtr) -> Result<(), ()> {
+  pub fn push(&mut self, node: DagNodePtr) -> Result<(), String> {
     if self.length >= self.capacity {
 
       // acquire_allocator().dump_memory_variables(); // Can cause deadlock
-      panic!("node_vec.len: {}, capacity: {}", self.length, self.capacity);
-      return Err(());
+      
+      return Err(format!("node_vec.len: {}, capacity: {}", self.length, self.capacity));
     }
 
     self.data[self.length] = node;

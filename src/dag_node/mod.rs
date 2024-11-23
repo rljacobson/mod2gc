@@ -22,10 +22,7 @@ The following compares Maude's `DagNode` to our implementation here.
 mod flags;
 mod node;
 mod root_container;
-mod arena;
 pub mod allocator;
-mod bucket;
-mod node_vector;
 
 pub use node::*;
 pub use flags::*;

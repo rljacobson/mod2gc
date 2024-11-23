@@ -2,11 +2,15 @@
 Utilities to build and print random trees
 
 */
-use std::fmt::Display;
-use std::io::Write;
+use std::{
+  fmt::Display,
+  io::Write
+};
+
 use rand::Rng;
+
 use crate::dag_node::{DagNode, DagNodePtr};
-use crate::dag_node::allocator::acquire_allocator;
+use crate::dag_node::allocator::acquire_node_allocator;
 use crate::symbol::Symbol;
 
 /// Recursively builds a random tree of `DagNode`s with a given height and arity rules.
@@ -16,10 +20,9 @@ use crate::symbol::Symbol;
 /// - `max_height`: Maximum allowed height for the tree.
 pub fn build_random_tree(symbols: &[Symbol], parent: DagNodePtr, max_height: usize, max_width: usize) {
   if max_width == 6 {
-    acquire_allocator().dump_memory_variables();
-    std::io::stdout().flush().unwrap();
+    acquire_node_allocator("dump_memory_variables").dump_memory_variables();
   }
-  { acquire_allocator().ok_to_collect_garbage(); }
+  { acquire_node_allocator("ok_to_collect_garbage").ok_to_collect_garbage(); }
   if max_height == 0 {
     return; // Reached the maximum depth
   }
@@ -45,8 +48,8 @@ pub fn build_random_tree(symbols: &[Symbol], parent: DagNodePtr, max_height: usi
 
     // Insert the child into the parent node
     unsafe {
-      if let Err(_) = (*parent).insert_child(child_node) {
-        eprintln!("Failed to insert child: level = {} child = {} parent_arity = {}", max_height, i, parent_arity);
+      if let Err(msg) = (*parent).insert_child(child_node) {
+        eprintln!("Failed to insert child: level = {} child = {} parent_arity = {}\n\t::{}", max_height, i, parent_arity, msg);
       };
     }
 
@@ -63,9 +66,9 @@ pub fn build_random_tree(symbols: &[Symbol], parent: DagNodePtr, max_height: usi
 pub fn print_tree(node: DagNodePtr, prefix: String, is_tail: bool) {
   assert_ne!(node, std::ptr::null_mut());
   let is_head = prefix.is_empty();
-  
+
   let node: &DagNode = unsafe{ &*node };
-  
+
   // Print the current node
   let new_prefix = if is_head {
     // if is_tail { "───" } else { "┌──" }

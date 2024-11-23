@@ -7,7 +7,7 @@ An arena allocator for `DagNode`s.
 use std::alloc::{alloc_zeroed, Layout};
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
-use crate::dag_node::allocator::ARENA_SIZE;
+use crate::dag_node::allocator::node_allocator::ARENA_SIZE;
 use crate::dag_node::node::DagNode;
 
 #[repr(align(8))]
@@ -30,17 +30,17 @@ impl Arena {
       }
     }
     // Convert the array to an initialized array
-    let data = unsafe { std::mem::transmute::<_, [DagNode; ARENA_SIZE]>(data) };
+    // let data = unsafe { std::mem::transmute::<_, [DagNode; ARENA_SIZE]>(data) };
     let arena = Box::new(Arena{
       next_arena: null_mut(),
-      data
+      data      : unsafe { std::mem::transmute::<_, [DagNode; ARENA_SIZE]>(data) }
     });
-    
+
     Box::into_raw(arena)
   }
 
   #[inline(always)]
   pub fn first_node(&mut self) -> *mut DagNode {
-    self.data.as_mut_ptr()
+    &mut self.data[0]
   }
 }
