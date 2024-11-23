@@ -27,14 +27,16 @@ use once_cell::sync::Lazy;
 
 use crate::{
   dag_node::{
-    allocator::arena::Arena,
+    allocator::{
+      arena::Arena,
+      storage_allocator::acquire_storage_allocator
+    },
     DagNode,
     DagNodeFlag,
     DagNodeFlags,
-    root_container::mark_roots
+    root_container::mark_roots,
   }
 };
-use crate::dag_node::allocator::storage_allocator::acquire_storage_allocator;
 
 // Constant Allocator Parameters
 pub const SMALL_MODEL_SLOP: f64   = 8.0;
@@ -57,7 +59,7 @@ static GLOBAL_NODE_ALLOCATOR: Lazy<Mutex<NodeAllocator>> = Lazy::new(|| {
 pub fn acquire_node_allocator(caller_msg: &str) -> MutexGuard<'static, NodeAllocator> {
   match GLOBAL_NODE_ALLOCATOR.try_lock() {
     Ok(allocator) => allocator,
-    Err(e) => {
+    Err(_) => {
       panic!("Global node allocator is deadlocked: {}", caller_msg);
     }
   }
@@ -421,23 +423,15 @@ impl NodeAllocator {
           node_cursor_ptr = node_cursor_ptr.add(1);
         } // end loop over nodes
 
-        arena_cursor = arena_cursor.as_mut_unchecked().next_arena;
+        arena_cursor    = arena_cursor.as_mut_unchecked().next_arena;
         node_cursor_ptr = arena_cursor.as_mut_unchecked().first_node();
         
       } // end loop over arenas
 
       // Now tidy last_active_arena from d upto and including last_active_node.
       let end_node_ptr = self.last_active_node;
-      let check_the_start = self.last_active_arena.as_mut_unchecked().first_node();
-      let check_the_end = check_the_start.add(ARENA_SIZE);
-      if check_the_start > node_cursor_ptr || check_the_end < node_cursor_ptr
-      {
-        panic!("node_cursor_ptr is not in last active arena");
-      }
       
-      let mut counter: u32 = 0;
       while node_cursor_ptr <= end_node_ptr {
-        counter += 1;
         let d_mut = node_cursor_ptr.as_mut_unchecked();
 
         if d_mut.is_marked() {

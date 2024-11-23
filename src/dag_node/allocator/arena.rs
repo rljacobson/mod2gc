@@ -4,11 +4,17 @@ An arena allocator for `DagNode`s.
 
 */
 
-use std::alloc::{alloc_zeroed, Layout};
-use std::mem::MaybeUninit;
-use std::ptr::null_mut;
-use crate::dag_node::allocator::node_allocator::ARENA_SIZE;
-use crate::dag_node::node::DagNode;
+use std::{
+  mem::MaybeUninit,
+  ptr::null_mut
+};
+
+use crate::{
+  dag_node::{
+    allocator::node_allocator::ARENA_SIZE,
+    node::DagNode
+  }
+};
 
 #[repr(align(8))]
 pub struct Arena {

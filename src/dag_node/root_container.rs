@@ -5,16 +5,16 @@ A `RootContainer` is a linked list of roots of garbage collected objects.
 */
 
 use std::{
+  ptr::NonNull,
   sync::{
     atomic::{
       AtomicPtr,
       Ordering
     },
     Mutex
-  }
+  },
+  sync::MutexGuard
 };
-use std::ptr::NonNull;
-use std::sync::{MutexGuard, TryLockResult};
 use crate::dag_node::node::DagNode;
 
 static LIST_HEAD: Mutex<AtomicPtr<RootContainer>> = Mutex::new(AtomicPtr::new(std::ptr::null_mut()));
@@ -89,7 +89,7 @@ impl RootContainer {
       unsafe {
         prev.as_mut().next = self.next;
       }
-    } else if let Some(mut next) = self.next {
+    } else if let Some(next) = self.next {
       list_head.store(next.as_ptr(), Ordering::Relaxed);
     } else {
       list_head.store(std::ptr::null_mut(), Ordering::Relaxed);
@@ -119,7 +119,6 @@ pub fn mark_roots() {
     match root {
       None => break,
       Some(mut root_ptr) => {
-        assert!(!root_ptr.as_ptr().is_null());
         let root_ref = unsafe{ root_ptr.as_mut() };
         root_ref.mark();
         root = root_ref.next;

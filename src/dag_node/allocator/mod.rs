@@ -14,6 +14,7 @@ mod node_allocator;
 mod storage_allocator;
 
 pub use node_allocator::{acquire_node_allocator, increment_active_node_count};
+#[allow(unused_imports)]
 pub use node_allocator::NodeAllocator;
 
 

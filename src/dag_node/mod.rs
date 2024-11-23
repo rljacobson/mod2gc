@@ -26,13 +26,11 @@ pub mod allocator;
 
 pub use node::*;
 pub use flags::*;
+#[allow(unused_imports)]
 pub use root_container::RootContainer;
 
 /// A `*mut Void` is a pointer to a `u8`
 pub type Void = u8;
-
-// To determine bucket usage target
-
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Default)]
 pub enum DagNodeKind {
@@ -50,10 +48,14 @@ pub enum DagNodeKind {
 
 #[cfg(test)]
 mod tests {
-  use crate::dag_node::DagNodeKind;
-  use crate::dag_node::flags::DagNodeFlags;
-  use crate::dag_node::node::{DagNode, DagNodeArgument};
-  use crate::symbol::SymbolPtr;
+  use crate::{
+    dag_node::{
+      DagNodeKind,
+      flags::DagNodeFlags,
+      node::{DagNode, DagNodeArgument}
+    },
+    symbol::SymbolPtr
+  };
 
   #[test]
   fn size_of_dag_node() {
