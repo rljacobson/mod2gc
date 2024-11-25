@@ -27,16 +27,17 @@ impl Arena {
   pub fn allocate_new_arena() -> *mut Arena {
 
     // Create an uninitialized array
-    let mut data: [MaybeUninit<DagNode>; ARENA_SIZE] = unsafe { MaybeUninit::uninit().assume_init() };
-
+    let data: [MaybeUninit<DagNode>; ARENA_SIZE] = unsafe { MaybeUninit::uninit().assume_init() };
+    
+    /* Each node is initialized on allocation, so we don't bother with this.
     // Initialize each element
     for elem in &mut data {
       unsafe {
-        std::ptr::write(elem.as_mut_ptr(), DagNode::default()); // Replace `DagNode::new()` with your constructor
+        std::ptr::write(elem.as_mut_ptr(), DagNode::default());
       }
     }
-    // Convert the array to an initialized array
-    // let data = unsafe { std::mem::transmute::<_, [DagNode; ARENA_SIZE]>(data) };
+    */
+    
     let arena = Box::new(Arena{
       next_arena: null_mut(),
       data      : unsafe { std::mem::transmute::<_, [DagNode; ARENA_SIZE]>(data) }

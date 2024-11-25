@@ -9,16 +9,20 @@ use crate::{
   dag_node::{
     DagNode,
     DagNodePtr,
-    allocator::acquire_node_allocator
   },
   symbol::Symbol
 };
 
-/// Recursively builds a random tree of `DagNode`s with a given height and arity rules.
-///
-/// - `symbols`: List of `Symbol` objects.
-/// - `parent`: Pointer to the current parent node.
-/// - `max_height`: Maximum allowed height for the tree.
+/*
+Recursively builds a random tree of `DagNode`s with a given height and arity rules.
+
+Because this function holds on to iterators of `NodeVec`s, the GC cannot run during
+the building of the tree. Run the GC before or after. 
+
+ - `symbols`: List of `Symbol` objects of each arity from 0 to `max_width`.
+ - `parent`: Pointer to the current parent node.
+ - `max_height`: Maximum allowed height for the tree.
+*/
 pub fn build_random_tree(
   symbols   : &[Symbol],
   parent    : DagNodePtr,
@@ -26,7 +30,6 @@ pub fn build_random_tree(
   max_width : usize,
   min_width : usize,
 ) {
-  { acquire_node_allocator("ok_to_collect_garbage").ok_to_collect_garbage(); }
   if max_height == 0 {
     return; // Reached the maximum depth
   }
@@ -41,7 +44,7 @@ pub fn build_random_tree(
   let parent_arity = unsafe { (*parent).arity() };
 
   // For each child based on the parent's arity, create a new node
-  for i in 0..parent_arity {
+  for i in 0..parent_arity as usize {
     // Determine the arity of the child node
     let child_arity = if max_height == 1 {
       0 // Leaf nodes must have arity 0
@@ -54,11 +57,10 @@ pub fn build_random_tree(
     let child_node   = DagNode::new(child_symbol);
 
     // Insert the child into the parent node
-    unsafe {
-      if let Err(msg) = (*parent).insert_child(child_node) {
-        eprintln!("Failed to insert child: level = {} child = {} parent_arity = {}\n\t::{}", max_height, i, parent_arity, msg);
-      };
-    }
+    let parent_mut = unsafe{ parent.as_mut_unchecked() };
+    if let Err(msg) = parent_mut.insert_child(child_node) {
+      eprintln!("Failed to insert child: level = {} child = {} parent_arity = {}\n\t::{}", max_height, i, parent_arity, msg);
+    };
 
     // Recursively build the subtree for the child
     build_random_tree(symbols, child_node, max_height - 1, max_width, min_width);
@@ -78,10 +80,9 @@ pub fn print_tree(node: DagNodePtr, prefix: String, is_tail: bool) {
 
   // Print the current node
   let new_prefix = if is_head {
-    // if is_tail { "───" } else { "┌──" }
     ""
   }else {
-    if is_tail { "└──" } else { "├──" }
+    if is_tail { "╰──" } else { "├──" }
   };
   println!(
     "{}{}{}",

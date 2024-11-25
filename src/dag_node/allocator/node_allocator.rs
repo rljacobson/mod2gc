@@ -37,36 +37,47 @@ use crate::{
     root_container::mark_roots,
   }
 };
+use crate::dag_node::DagNodePtr;
 
 // Constant Allocator Parameters
-pub const SMALL_MODEL_SLOP: f64   = 8.0;
-pub const BIG_MODEL_SLOP  : f64   = 2.0;
-pub const LOWER_BOUND     : usize =  4 * 1024 * 1024; // Use small model if <= 4 million nodes
-pub const UPPER_BOUND     : usize = 32 * 1024 * 1024; // Use big model if >= 32 million nodes
+const SMALL_MODEL_SLOP: f64   = 8.0;
+const BIG_MODEL_SLOP  : f64   = 2.0;
+const LOWER_BOUND     : usize =  4 * 1024 * 1024; // Use small model if <= 4 million nodes
+const UPPER_BOUND     : usize = 32 * 1024 * 1024; // Use big model if >= 32 million nodes
 // It looks like Maude assumes DagNodes are 6 words in size, but ours are 3 words,
 // at least so far.
 pub(crate) const ARENA_SIZE: usize = 5460; // Arena size in nodes; 5460 * 6 + 1 + new/malloc_overhead <= 32768 words
-pub const RESERVE_SIZE         : usize = 256; // If fewer nodes left call GC when allowed
+const RESERVE_SIZE         : usize = 256; // If fewer nodes left call GC when allowed
 
 
-pub static ACTIVE_NODE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static ACTIVE_NODE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static GLOBAL_NODE_ALLOCATOR: Lazy<Mutex<NodeAllocator>> = Lazy::new(|| {
   Mutex::new(NodeAllocator::new())
 });
 
-
+/// Acquire the global node allocator. The `caller_msg` is for debugging purposes.
 #[inline(always)]
 pub fn acquire_node_allocator(caller_msg: &str) -> MutexGuard<'static, NodeAllocator> {
-  match GLOBAL_NODE_ALLOCATOR.try_lock() {
-    Ok(allocator) => allocator,
-    Err(_) => {
-      panic!("Global node allocator is deadlocked: {}", caller_msg);
-    }
-  }
+  GLOBAL_NODE_ALLOCATOR.lock().expect(caller_msg)
+}
+
+#[inline(always)]
+pub fn ok_to_collect_garbage() {
+  acquire_node_allocator("ok_to_collect_garbage").ok_to_collect_garbage();
+}
+
+#[inline(always)]
+pub fn want_to_collect_garbage() -> bool {
+  acquire_node_allocator("want_to_collect_garbage").want_to_collect_garbage()
+}
+
+#[inline(always)]
+pub fn allocate_dag_node() -> DagNodePtr {
+  acquire_node_allocator("want_to_collect_garbage").allocate_dag_node()
 }
 
 
-pub struct NodeAllocator {
+pub(crate) struct NodeAllocator {
   // General settings
   show_gc   : bool, // Do we report GC stats to user
   early_quit: u64,  // Do we quit early for profiling purposes
@@ -151,7 +162,8 @@ impl NodeAllocator {
             drop_in_place(current_node_mut);
             break;
           }
-          current_node_mut.flags.remove(DagNodeFlag::Marked);
+          // current_node_mut.flags.remove(DagNodeFlag::Marked);
+          current_node_mut.flags = DagNodeFlags::default();
         }
 
         current_node = current_node.add(1);
@@ -207,7 +219,7 @@ impl NodeAllocator {
         let first_node     = arena.first_node();
         // The last arena in the linked list is given a reserve.
         self.end_pointer   = first_node.add(ARENA_SIZE - RESERVE_SIZE);
-        
+
         // These two members are initialized on first call to `NodeAllocator::sweep_arenas()`.
         // self.last_active_arena = arena;
         // self.last_active_node  = first_node;
@@ -322,7 +334,7 @@ impl NodeAllocator {
     let active_node_count = active_node_count(); // updated during mark phase
 
     let node_capacity = (self.arena_count as usize) * ARENA_SIZE;
-    
+
     if self.show_gc {
       // println!(
       //   "Arenas: {}\tNodes: {} ({:.2} MB)\tCollected: {} ({:.2}) MB\tNow: {} ({:.2} MB)",
@@ -379,7 +391,7 @@ impl NodeAllocator {
 
     // Allocate new arenas so that we have capacity for at least slop_factor times the actually used nodes.
     let ideal_arena_count = (active_node_count as f64 * slop_factor / (ARENA_SIZE as f64)).ceil() as u32;
-    
+
     #[cfg(feature = "gc_debug")]
     println!("ideal_arena_count: {}", ideal_arena_count);
     while self.arena_count < ideal_arena_count {
@@ -453,12 +465,12 @@ impl NodeAllocator {
 
         arena_cursor    = arena_cursor.as_mut_unchecked().next_arena;
         node_cursor_ptr = arena_cursor.as_mut_unchecked().first_node();
-        
+
       } // end loop over arenas
 
       // Now tidy last_active_arena from d upto and including last_active_node.
       let end_node_ptr = self.last_active_node;
-      
+
       while node_cursor_ptr <= end_node_ptr {
         let d_mut = node_cursor_ptr.as_mut_unchecked();
 
@@ -546,7 +558,7 @@ impl NodeAllocator {
     let bucket_needs_collection = acquire_storage_allocator().want_to_collect_garbage();
 
     //────────
-    eprintln!("┌─────────────────────────────────────────────┐");
+    eprintln!("╭─────────────────────────────────────────────╮");
     eprintln!("│{:<32} {:>12}│", "Variable", "Value");
     eprintln!("├─────────────────────────────────────────────┤");
     eprintln!("│{:<32} {:>12}│", "arena_count", self.arena_count);
@@ -602,7 +614,7 @@ impl NodeAllocator {
       "last_active_node",
       self.last_active_node
     );
-    eprintln!("└─────────────────────────────────────────────┘");
+    eprintln!("╰─────────────────────────────────────────────╯");
   }
 /*  pub fn dump_memory_variables(&self) {
     let bucket_needs_collection = acquire_storage_allocator().want_to_collect_garbage();
@@ -643,7 +655,7 @@ impl NodeAllocator {
 
 
 #[inline(always)]
-pub fn increment_active_node_count() {
+pub(crate) fn increment_active_node_count() {
   ACTIVE_NODE_COUNT.fetch_add(1, Relaxed);
 }
 
@@ -658,14 +670,12 @@ mod tests {
   use crate::abstractions::IString;
   use crate::dag_node::{DagNode, DagNodeKind, DagNodePtr, RootContainer};
   use crate::dag_node::allocator::*;
-  use crate::dag_node::allocator::NodeAllocator;
   use crate::symbol::Symbol;
   use crate::util::{build_random_tree, print_tree};
 
   #[test]
   fn test_allocate_dag_node() {
-    let mut allocator = NodeAllocator::new();
-    let node_ptr = allocator.allocate_dag_node();
+    let node_ptr = allocate_dag_node();
     let node_mut = match unsafe { node_ptr.as_mut() } {
       None => {
         panic!("allocate_dag_node returned None");
@@ -687,11 +697,11 @@ mod tests {
         .collect::<Vec<_>>();
 
     let root = DagNode::new(&symbols[3]);
-    let root_container = RootContainer::new(root);
+    let _root_container = RootContainer::new(root);
 
     // Maximum tree height
-    const max_height: usize = 6;
-    const max_width : usize = 4;
+    let max_height: usize = 6;
+    let max_width : usize = 3;
 
     // Recursively build the random tree
     build_random_tree(&symbols, root, max_height, max_width, 0);
@@ -712,19 +722,21 @@ mod tests {
 
     for _ in 0..100 {
       let mut root_vec = Vec::with_capacity(10);
-      
+
       for _ in 0..10 {
         let root: DagNodePtr = DagNode::new(&symbols[4]);
         let root_container = RootContainer::new(root);
         root_vec.push(root_container);
 
         // Maximum tree height
-        const max_height: usize = 6; // exponent
-        const max_width : usize = 4; // base
+        let max_height: usize = 6; // exponent
+        let max_width : usize = 4; // base
 
         // Recursively build the random tree
         build_random_tree(&symbols, root, max_height, max_width, 0);
       }
+      { acquire_node_allocator("ok_to_collect_garbage").ok_to_collect_garbage(); }
+
       // root_vec dropped
     }
       acquire_node_allocator("dump_memory_variables").dump_memory_variables()
@@ -733,37 +745,31 @@ mod tests {
 
   #[test]
   fn test_arena_exhaustion() {
-    let mut allocator = NodeAllocator::new();
     let mut symbol = Symbol::new(IString::from("mysymbol"), 1);
     let symbol_ptr = &mut symbol;
     let root: DagNodePtr = DagNode::new(symbol_ptr);
     println!("root: {:p}", root);
 
-    let root_container = RootContainer::new(root);
-    
+    let _root_container = RootContainer::new(root);
+
     let mut last_node = root;
-    
-    for j in 1..=10000 {
-      let node_ptr = allocator.allocate_dag_node();
+
+    for _ in 1..=10000 {
+      let node_ptr = allocate_dag_node();
       let node_mut = match unsafe { node_ptr.as_mut() } {
         None => {
           panic!("allocate_dag_node returned None");
         }
-        Some(node) => { 
-          node 
+        Some(node) => {
+          node
         }
       };
       unsafe {
         (&mut*last_node).insert_child(node_ptr).expect("Could not insert child");
       }
-      last_node = node_ptr;
+      last_node     = node_ptr;
       node_mut.kind = DagNodeKind::Free;
-      // The tree is 10000 nodes deep. The mark phase will blow the stack.
-      // if j % 100 == 0 {
-      //   allocator.ok_to_collect_garbage();
-      // }
     }
-    
-    allocator.dump_memory_variables();
+
   }
 }

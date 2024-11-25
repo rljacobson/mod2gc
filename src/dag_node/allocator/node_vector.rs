@@ -63,7 +63,6 @@ impl NodeVector {
     let capacity = vec.len();
 
     let node_vector_mut: NodeVectorMutRef = NodeVector::with_capacity(capacity);
-    // let node_vector_mut: &mut NodeVector = unsafe{ node_vector.as_mut().get_unchecked_mut() };
 
     // Copy contents of vec into node_vector.data
     for (i, &item) in vec.iter().enumerate() {
@@ -84,11 +83,8 @@ impl NodeVector {
   /// Makes a copy of this node but with `new_capacity`. If `self.length` > `new_capacity`,
   /// nodes are truncated.
   pub fn copy_with_capacity(&self, new_capacity: usize) -> NodeVectorMutRef {
-    // let this: &NodeVector = self.as_ref().get_ref();
-
     if new_capacity > self.capacity {
       let new_vector_mut: NodeVectorMutRef = NodeVector::with_capacity(new_capacity);
-      // let new_vector_mut: &mut NodeVector  = unsafe { new_vector.as_mut().get_unchecked_mut() };
 
       new_vector_mut.length = self.length;
 
@@ -133,14 +129,12 @@ impl NodeVector {
 
   /// Pushes the given node onto the (end) of the vector if there is enough capacity.
   pub fn push(&mut self, node: DagNodePtr) -> Result<(), String> {
+    #[cfg(feature = "gc_debug")]
     if self.length >= self.capacity 
-        || self.data.len() > self.capacity
-        || self.data.len() <= self.length
+        || self.data.len() != self.capacity
     {
       panic!("node_vec.len: {}, capacity: {}, data.len: {}", self.length, self.capacity, self.data.len());
-      // acquire_allocator().dump_memory_variables(); // Can cause deadlock
-
-      return Err(format!("node_vec.len: {}, capacity: {}, data.len: {}", self.length, self.capacity, self.data.len()));
+      // return Err(format!("node_vec.len: {}, capacity: {}, data.len: {}", self.length, self.capacity, self.data.len()));
     }
 
     self.data[self.length] = node;

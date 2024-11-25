@@ -10,17 +10,9 @@ mod util;
 
 #[cfg(test)]
 mod tests {
-  use std::io::Write;
   use crate::{
-    dag_node::{
-      DagNode,
-      DagNodePtr,
-      RootContainer,
-      allocator::acquire_node_allocator
-    },
     symbol::Symbol,
     abstractions::IString,
-    util::{build_random_tree, print_tree}
   };
 
   #[test]

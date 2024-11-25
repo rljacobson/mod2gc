@@ -8,26 +8,29 @@
 use std::{
   cmp::max,
   fmt::{Display, Formatter},
-  marker::PhantomPinned
+  marker::PhantomPinned,
+  ptr::null_mut
 };
-use std::ptr::null_mut;
 use crate::{
   dag_node::{
     flags::{
       DagNodeFlag,
       DagNodeFlags
     },
-    DagNodeKind
+    DagNodeKind,
+    allocator::{
+      allocate_dag_node,
+      increment_active_node_count,
+      node_vector::{
+        NodeVector,
+        NodeVectorMutRef
+      }
+    }
   },
   symbol::{
     Symbol,
     SymbolPtr
   },
-};
-use crate::dag_node::allocator::{acquire_node_allocator, increment_active_node_count};
-use crate::dag_node::allocator::node_vector::{
-  NodeVector,
-  NodeVectorMutRef
 };
 
 /// Public interface uses `Pin`. We need to be able to have multiple references,
@@ -62,7 +65,7 @@ impl DagNode {
   }
 
   pub fn with_kind(symbol: SymbolPtr, kind: DagNodeKind) -> DagNodePtr {
-    let node: DagNodePtr = { acquire_node_allocator("DagNode::with_kind").allocate_dag_node() };
+    let node: DagNodePtr = allocate_dag_node();
     let node_mut         = unsafe { &mut *node };
 
     let arity = unsafe{ &*symbol }.arity as usize;
@@ -80,7 +83,7 @@ impl DagNode {
 
   pub fn with_args(symbol: SymbolPtr, args: &mut Vec<DagNodePtr>, kind: DagNodeKind) -> DagNodePtr {
     assert!(!symbol.is_null());
-    let node: DagNodePtr = { acquire_node_allocator("DagNode::with_args").allocate_dag_node() };
+    let node: DagNodePtr = { allocate_dag_node() };
     let node_mut         = unsafe { &mut *node };
 
     node_mut.kind   = kind;
@@ -210,10 +213,10 @@ impl DagNode {
 
     increment_active_node_count();
     self.flags.insert(DagNodeFlag::Marked);
-
-    // Temporarily replace `self.args` with a placeholder
-    let current_args = std::mem::replace(&mut self.args, DagNodeArgument::None);
-    match current_args {
+    
+    let arity = self.arity();
+    
+    match &mut self.args {
 
       DagNodeArgument::None => { /* pass */ }
 
@@ -221,10 +224,11 @@ impl DagNode {
         if let Some(node) = unsafe { node.as_mut() } {
           node.mark();
         }
-        self.args = DagNodeArgument::Single(node);
       }
 
-      DagNodeArgument::Many(node_vec) => {
+      DagNodeArgument::Many(ref mut node_vec) => {
+        
+
         for node in node_vec.iter() {
           if let Some(node) = unsafe { node.as_mut() } {
             node.mark();
@@ -232,9 +236,13 @@ impl DagNode {
             eprintln!("Bad node found.")
           }
         }
+
+        if node_vec.capacity() != arity as usize || node_vec.len() > node_vec.capacity() {
+          panic!("Node vector capacity mismatch.")
+        }
+        
         // Reallocate
-        let node_vec = node_vec.shallow_copy();
-        self.args = DagNodeArgument::Many(node_vec);
+        *node_vec = node_vec.shallow_copy();
       }
 
     }
